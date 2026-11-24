@@ -1,0 +1,58 @@
+# Local stack: Postgres + Azurite (Blob Storage emulator) + API + web. Open http://localhost:8080
+# Demo logins: owner@demo.in / accounts@demo.in / amit@demo.in / raju@demo.in, password Demo@1234
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dos
+      POSTGRES_USER: dos
+      POSTGRES_PASSWORD: dos-local-only
+    ports: ["5432:5432"]
+    volumes: [dbdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dos -d dos"]
+      interval: 5s
+      retries: 20
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+    ports: ["10000:10000"]
+
+  api:
+    build: ./backend
+    depends_on:
+      db: { condition: service_healthy }
+      azurite: { condition: service_started }
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/dos
+      DATABASE_USER: dos
+      DATABASE_PASSWORD: dos-local-only
+      FLYWAY_LOCATIONS: classpath:db/migration,classpath:db/demo
+      JWT_SECRET: local-dev-secret-local-dev-secret-local-dev-secret
+      BLOB_MODE: azure
+      # Azurite's well-known public development key (not a secret)
+      AZURE_STORAGE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+      WHATSAPP_MODE: mock
+      WHATSAPP_APP_SECRET: local-webhook-secret
+      WHATSAPP_VERIFY_TOKEN: local-verify
+      TALLY_MODE: mock
+      SIMULATE_ENABLED: "true"
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-10}
+    ports: ["8081:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 5s
+      retries: 40
+      start_period: 30s
+
+  web:
+    build: ./frontend
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      API_URL: http://api:8080
+    ports: ["8080:8080"]
+
+volumes:
+  dbdata:

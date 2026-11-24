@@ -1,0 +1,76 @@
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: ${TOMCAT_MAX_THREADS:200}
+
+spring:
+  application:
+    name: distributoros-api
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/dos}
+    username: ${DATABASE_USER:postgres}
+    password: ${DATABASE_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      connection-timeout: 5000
+      connection-init-sql: SET TIME ZONE 'Asia/Kolkata'
+  flyway:
+    locations: ${FLYWAY_LOCATIONS:classpath:db/migration}
+    # demo data uses V1000+; real migrations added later (V2, V3...) must still apply on demo databases
+    out-of-order: true
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:dev-only-secret-change-me-dev-only-secret-change-me}
+    ttl-hours: ${JWT_TTL_HOURS:12}
+  whatsapp:
+    mode: ${WHATSAPP_MODE:mock}                # mock | cloud
+    api-base: ${WHATSAPP_API_BASE:https://graph.facebook.com/v21.0}
+    access-token: ${WHATSAPP_ACCESS_TOKEN:}
+    app-secret: ${WHATSAPP_APP_SECRET:}
+    verify-token: ${WHATSAPP_VERIFY_TOKEN:}
+  tally:
+    mode: ${TALLY_MODE:mock}                   # mock | http
+    url: ${TALLY_URL:http://localhost:9000}
+    company: ${TALLY_COMPANY:}
+    sales-ledger: ${TALLY_SALES_LEDGER:Sales @18% GST (Local)}
+    cgst-ledger: ${TALLY_CGST_LEDGER:CGST 9%}
+    sgst-ledger: ${TALLY_SGST_LEDGER:SGST 9%}
+    bank-ledger: ${TALLY_BANK_LEDGER:HDFC Bank}
+    auto-sync: ${TALLY_AUTO_SYNC:false}
+    max-attempts: 5
+  blob:
+    mode: ${BLOB_MODE:local}                   # local | azure
+    local-dir: ${BLOB_LOCAL_DIR:./data/blobs}
+    connection-string: ${AZURE_STORAGE_CONNECTION_STRING:}
+    account-url: ${AZURE_STORAGE_ACCOUNT_URL:}
+    container: ${AZURE_STORAGE_CONTAINER:distributoros}
+  simulate-enabled: ${SIMULATE_ENABLED:true}
+  login-rate-limit-per5min: ${LOGIN_RATE_LIMIT:10}

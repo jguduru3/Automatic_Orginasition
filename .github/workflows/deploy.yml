@@ -1,0 +1,88 @@
+name: Deploy to Azure
+
+# Needs repository variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RG, AZURE_LOCATION, APP_PREFIX
+# and secrets: POSTGRES_ADMIN_PASSWORD, JWT_SECRET (32+ chars), optionally WHATSAPP_ACCESS_TOKEN, WHATSAPP_APP_SECRET,
+# WHATSAPP_VERIFY_TOKEN. The federated credential (OIDC) needs Contributor + User Access Administrator on the resource group.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      loadDemoData: { description: Load demo tenant, type: boolean, default: false }
+      whatsappMode: { description: WhatsApp mode, type: choice, options: [mock, cloud], default: mock }
+      tallyMode: { description: Tally mode, type: choice, options: [mock, http], default: mock }
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency: deploy-production
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+      WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET }}
+      WHATSAPP_VERIFY_TOKEN: ${{ secrets.WHATSAPP_VERIFY_TOKEN }}
+      RG: ${{ vars.AZURE_RG }}
+      PREFIX: ${{ vars.APP_PREFIX }}
+      TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.TAG }}' }
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Resource group
+        run: az group create -n "$RG" -l "${{ vars.AZURE_LOCATION }}" -o none
+
+      - name: Platform (registry, Postgres, storage, environment)
+        id: platform
+        run: |
+          out=$(az deployment group create -g "$RG" -f infra/main.bicep \
+            -p prefix="$PREFIX" deployApps=false \
+               postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" jwtSecret="$JWT_SECRET" \
+            --query properties.outputs -o json)
+          echo "acr=$(echo "$out" | jq -r .acrName.value)" >> "$GITHUB_OUTPUT"
+          echo "server=$(echo "$out" | jq -r .acrLoginServer.value)" >> "$GITHUB_OUTPUT"
+
+      - name: Build images in ACR
+        run: |
+          az acr build -r "${{ steps.platform.outputs.acr }}" -t "dos-api:$TAG" backend --no-logs
+          az acr build -r "${{ steps.platform.outputs.acr }}" -t "dos-web:$TAG" frontend --no-logs
+
+      - name: Deploy container apps
+        id: apps
+        run: |
+          out=$(az deployment group create -g "$RG" -f infra/main.bicep \
+            -p prefix="$PREFIX" deployApps=true \
+               apiImage="${{ steps.platform.outputs.server }}/dos-api:$TAG" \
+               webImage="${{ steps.platform.outputs.server }}/dos-web:$TAG" \
+               postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" jwtSecret="$JWT_SECRET" \
+               whatsappAccessToken="$WHATSAPP_ACCESS_TOKEN" whatsappAppSecret="$WHATSAPP_APP_SECRET" \
+               whatsappVerifyToken="$WHATSAPP_VERIFY_TOKEN" \
+               whatsappMode='${{ inputs.whatsappMode || 'mock' }}' tallyMode='${{ inputs.tallyMode || 'mock' }}' \
+               loadDemoData=${{ inputs.loadDemoData || false }} \
+            --query properties.outputs -o json)
+          url=$(echo "$out" | jq -r .webUrl.value)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### Deployed: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "WhatsApp webhook: $(echo "$out" | jq -r .whatsappWebhookUrl.value)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ steps.apps.outputs.url }}/api/auth/login" -H 'Content-Type: application/json' -d '{"email":"x@y.z","password":"x"}')
+            [ "$code" = "401" ] && { echo "API reachable through web"; exit 0; }
+            sleep 10
+          done
+          echo "Smoke test failed (last status $code)"; exit 1
