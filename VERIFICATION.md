@@ -62,5 +62,5 @@ A second demo business, **Sai Medico Distributors** (`owner@pharma.demo.in`), sh
 
 The Java backend has not been compiled, because Maven Central is blocked in the build workspace. The SQL (179 statements
 plus 16 assembled variants), parser, Tally XML and master parsing, concurrency logic (7 pgbench races) and frontend
-(40 tests, real-browser render) were all run. The first CI run compiles and runs the 30 backend tests, 21 Playwright
+(40 tests, real-browser render) were all run. The first CI run compiles and runs the 29 backend tests, 21 Playwright
 tests and 8 k6 load tests.
