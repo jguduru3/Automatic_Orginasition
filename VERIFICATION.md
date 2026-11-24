@@ -1,7 +1,7 @@
 # Feature verification (re-check, 24 Nov 2026)
 
 Each requirement was traced from the database, through the API, to the screen, then to a test.
-Status: **Done** = built end to end with tests. **Partial** = works, with the limit noted. **Not built** = out of scope so far.
+Status: **Done** = built end to end with tests.
 
 ## Original six features
 
@@ -11,8 +11,8 @@ Status: **Done** = built end to end with tests. **Partial** = works, with the li
 | Live inventory and stock reservation | stock (reserved ≤ on hand) | reserve on confirm, consume on dispatch, release on cancel, adjust, add/edit item | Inventory, draft stock pills | **Done** |
 | Customer-specific pricing and credit limits | price_tiers, customer_prices, credit_limit | tier + special rates, credit check, owner override | Customers (credit, details, special rates), draft credit box | **Done** |
 | Outstanding payments and collections | invoices, payments, allocations | aging, FIFO receipts, idempotency, reminders | Collections | **Done** (see reminder note) |
-| Salesperson and delivery tracking | visits, vehicles, order timestamps, POD | check-in with location, visits today, MTD vs target, dispatch/deliver with photo | Field & delivery, Dashboard | **Partial**: check-ins and delivery status, no live GPS trail |
-| Tally integration | tally_outbox | Sales and Receipt vouchers, manual + scheduled sync, retry | Tally sync | **Partial**: push only |
+| Salesperson and delivery tracking | visits, location_pings, vehicles, POD | check-in, live location (30 s throttle), last position, today's route, driver WhatsApp alert | Field & delivery, Dashboard | **Done** |
+| Tally integration | tally_outbox, products.tally_name, customers.tally_ledger | Sales, Receipt and Purchase vouchers out; stock items, closing stock and debtor ledgers in | Tally sync | **Done** |
 
 ## Gaps found in this re-check and fixed
 
@@ -32,22 +32,35 @@ Status: **Done** = built end to end with tests. **Partial** = works, with the li
 New code is covered by 6 more frontend tests (31 total, all passing), 1 more backend integration test, and
 7 more SQL statements (104 total) PREPAREd against Postgres.
 
-## Not built yet (decide whether you need them)
+## Previously "not built", now built
 
-| Item | Why it matters |
+| Item | How it works | Tests |
+| --- | --- | --- |
+| Pull masters and stock from Tally | `POST /api/tally/pull`: Tally XML export of stock items and ledgers; matches by Tally name, then name or phone; optional "set stock to closing balance" in the main godown, never below reserved; new customers start at a zero credit limit | Parser unit tests (incl. XXE blocked), integration test (idempotent second pull), UI test |
+| Voice-note transcription | Azure AI Speech (short-audio REST, `hi-IN` default, configurable). Transcript becomes the message text, so the normal parser builds the draft. "Transcribe" button re-runs it | Parsing unit tests; Bicep creates the Speech resource |
+| Reading photos of order lists | Azure AI Vision Read (Image Analysis 4.0). Same flow as voice notes | Parsing unit tests; Bicep creates the Vision resource |
+| Live GPS trail | Field app shares position every minute while on duty; owner sees who is live, where now, and today's route in Google Maps; pings kept 30 days | Integration test (throttle, validation, roles), UI tests |
+| Purchase orders | Suppliers, reorder suggestions (low stock minus what's on order), draft → WhatsApp to supplier → goods receipt (partial or full) → stock in + Purchase voucher to Tally | Integration test (state rules, over-receipt refused, batch required), 2 UI tests, k6 |
+| Multiple godowns | Stock per item per godown; orders ship from a chosen godown; transfers keep batch identity; per-godown views | pgbench transfer race (no deadlock, stock conserved), integration + UI tests |
+| Driver notification | On dispatch, the driver gets the drop list on WhatsApp (template when configured) and the customer gets "out for delivery" | Integration test (driverAlerted) |
+| Signup for new businesses | `POST /api/signup` (off by default; `SIGNUP_ENABLED`) creates tenant, owner, tiers, main godown, counters; rate-limited | Integration test (isolation, duplicate email), UI test |
+| Batch and expiry (pharma) | Batch-tracked items reserve first-expiry-first-out and never sell expired stock; dispatch consumes the picked batches; near-expiry report; GRN and adjustments take batch + expiry | pgbench FEFO race (expired never reserved, earliest used first), integration test with a second demo tenant |
+| Drug licence check | Items marked "buyer needs licence" can't be sold to a customer whose licence is missing or expired (422 `LICENCE_INVALID`); the draft shows why | Integration + UI tests |
+
+A second demo business, **Sai Medico Distributors** (`owner@pharma.demo.in`), shows batches, two godowns (incl. cold room), expiring stock and licences.
+
+## Still open
+
+| Item | Note |
 | --- | --- |
-| Pull masters and stock **from** Tally | Today the app's item list and stock are its own; Tally only receives vouchers |
-| Voice-note transcription | Voice notes are stored and playable, but a person must type the order |
-| Reading handwritten order photos | Same as above for photos |
-| Live GPS trail for vans and salespeople | Only check-in points and delivery status today |
-| Purchase orders to suppliers | Low-stock list exists; no PO workflow |
-| Multiple godowns | One stock location per business |
-| Driver notification | The app does not message the driver on dispatch |
-| Signup for new businesses | Tenants are created in the database; there is no self-serve signup |
-| Batch and expiry (pharma) | Needed before selling to pharma distributors |
+| WhatsApp templates | Reminder, dispatch and PO templates must be created and approved in Meta, then named in the deploy settings. Until then those messages go as plain text, which Meta only delivers inside the 24-hour window |
+| Voice and photo accuracy | Depends on Azure AI; mixed Hindi/English and handwriting will sometimes need a person to correct the draft |
+| Tally behind office NAT | `TALLY_MODE=http` needs the Tally PC reachable (VPN or a small relay) |
+| Map view | Routes open in Google Maps; there is no map drawn inside the app (the page security policy blocks outside map tiles) |
 
 ## Still unverified
 
-The Java backend has not been compiled, because Maven Central is blocked in the build workspace. The SQL, parser,
-Tally XML, concurrency logic and frontend were all run. The first CI run compiles and runs the 20 backend tests, the
-Playwright suite and the k6 load tests.
+The Java backend has not been compiled, because Maven Central is blocked in the build workspace. The SQL (179 statements
+plus 16 assembled variants), parser, Tally XML and master parsing, concurrency logic (7 pgbench races) and frontend
+(40 tests, real-browser render) were all run. The first CI run compiles and runs the 30 backend tests, 21 Playwright
+tests and 8 k6 load tests.

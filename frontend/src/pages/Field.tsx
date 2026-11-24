@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, post } from "../api";
 import { FileButton, Loading, PageTop, Pill, useAction, useApi } from "../components/ui";
 import { inr, lakh, n, pct, time } from "../format";
@@ -18,6 +18,8 @@ export default function Field() {
   return (
     <>
       <PageTop title="Field & delivery" sub="Salesperson check-ins and today's delivery runs"><button className="btn sm" onClick={d.reload}>Refresh</button></PageTop>
+      {(user.role === "SALES" || user.role === "DELIVERY") && <ShareLocation />}
+      {can(user, "OWNER", "ACCOUNTANT") && <LiveMap />}
       {user.role === "SALES" && <CheckIn onDone={() => { d.reload(); visits.reload(); }} />}
       {user.role !== "DELIVERY" && <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))" }}>
         {d.data.salespeople.map(s => (
@@ -78,5 +80,60 @@ function CheckIn({ onDone }: { onDone: () => void }) {
         <button className="btn pri" disabled={busy || !customerId}>{busy ? "Checking in…" : "Check in"}</button>
       </div>
     </form>
+  );
+}
+
+/** Sends the phone's position while this screen is open (at most once a minute). */
+function ShareLocation() {
+  const [on, setOn] = useState(false);
+  const [status, setStatus] = useState("");
+  const last = useRef(0);
+  useEffect(() => {
+    if (!on) return;
+    if (!navigator.geolocation) { setStatus("This device can't share location"); setOn(false); return; }
+    const id = navigator.geolocation.watchPosition(p => {
+      const now = Date.now();
+      if (now - last.current < 60_000) return;
+      last.current = now;
+      post<{ stored: boolean }>("/api/field/location", { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy) })
+        .then(() => setStatus(`Location sent at ${time(new Date().toISOString())}`)).catch(() => setStatus("Could not send location, will retry"));
+    }, () => { setStatus("Location permission denied"); setOn(false); }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 20_000 });
+    return () => navigator.geolocation.clearWatch(id);
+  }, [on]);
+  return (
+    <div className="card"><div className="card-h" style={{ margin: 0 }}><h2>Live location</h2>
+      <div className="row-actions"><span className="sub">{on ? status || "Waiting for GPS…" : "Off"}</span>
+        <button className="btn sm" aria-pressed={on} onClick={() => { setStatus(""); setOn(o => !o); }}>{on ? "Stop sharing" : "Share while on duty"}</button></div></div>
+      <span className="sub">Shared only while this screen is open. Your manager sees your last position and today's route.</span>
+    </div>
+  );
+}
+
+interface Live { userId: number; name: string; role: string; lat: number; lng: number; accuracy?: number; recordedAt: string; ageSeconds: number; pointsToday: number }
+
+function LiveMap() {
+  const live = useApi(s => api<Live[]>("/api/field/live", { signal: s }));
+  const [route, setRoute] = useState<string | null>(null);
+  useEffect(() => { const t = window.setInterval(live.reload, 60_000); return () => window.clearInterval(t); }, [live.reload]);
+  async function openRoute(p: Live) {
+    const pts = await api<{ lat: number; lng: number }[]>(`/api/field/trail/${p.userId}`);
+    if (pts.length < 2) { setRoute(`https://www.google.com/maps?q=${p.lat},${p.lng}`); return; }
+    const step = Math.max(1, Math.ceil(pts.length / 10)); // Google Maps allows ~10 waypoints in a link
+    const sample = pts.filter((_, i) => i % step === 0);
+    const last = pts[pts.length - 1];
+    setRoute(`https://www.google.com/maps/dir/${[...sample, last].map(x => `${x.lat},${x.lng}`).join("/")}`);
+  }
+  if (!live.data) return null;
+  return (
+    <div className="card"><div className="card-h"><h2>Team on the move</h2><span className="hint">Refreshes every minute</span></div>
+      {live.data.length === 0 ? <div className="empty">No one is sharing location right now.</div> : <div className="tbl-wrap"><table><tbody>
+        {live.data.map(p => <tr key={p.userId}><td>{p.name}<span className="sub">{p.role === "DELIVERY" ? "Delivery" : "Sales"}</span></td>
+          <td>{p.ageSeconds < 300 ? <Pill tone="good">Live</Pill> : <Pill tone="mute">{Math.round(p.ageSeconds / 60)} min ago</Pill>}</td>
+          <td className="sub">{n(p.pointsToday)} points today{p.accuracy ? ` · ±${Math.round(p.accuracy)} m` : ""}</td>
+          <td><div className="row-actions"><a className="btn ghost sm" href={`https://www.google.com/maps?q=${p.lat},${p.lng}`} target="_blank" rel="noreferrer">Where now</a>
+            <button className="btn ghost sm" onClick={() => openRoute(p)}>Today's route</button></div></td></tr>)}
+      </tbody></table></div>}
+      {route && <p style={{ margin: "10px 0 0" }}><a href={route} target="_blank" rel="noreferrer">Open today's route in Google Maps</a></p>}
+    </div>
   );
 }

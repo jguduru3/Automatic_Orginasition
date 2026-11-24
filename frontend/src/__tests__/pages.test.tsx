@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { setToken } from "../api";
 import { ToastProvider } from "../components/ui";
@@ -123,11 +123,12 @@ describe("orders", () => {
 
 describe("inventory, customers, collections, field, tally", () => {
   it("validates stock adjustments against reserved stock", async () => {
-    renderAt("/inventory", { "GET /api/inventory": F.inventory });
+    renderAt("/inventory", { "GET /api/inventory": F.inventory, "GET /api/godowns": F.godowns, "GET /api/inventory/expiring": [], "GET /api/inventory/7": F.rc40Detail });
     const u = userEvent.setup();
-    await u.click((await screen.findAllByRole("button", { name: "Adjust stock" }))[1]);
+    const row = (await screen.findByText("RCCB 40A 4P 30mA")).closest("tr")!;
+    await u.click(within(row).getByRole("button", { name: "Adjust" }));
     await u.type(screen.getByLabelText("Change in quantity"), "-20");
-    expect(screen.getByText(/can't go below the 6 already reserved/)).toBeInTheDocument();
+    expect(await screen.findByText(/can't go below what is already reserved/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
@@ -215,7 +216,7 @@ describe("features added in re-verification", () => {
   });
 
   it("rejects an invalid match pattern before saving an item", async () => {
-    renderAt("/inventory", { "GET /api/inventory": F.inventory });
+    renderAt("/inventory", { "GET /api/inventory": F.inventory, "GET /api/godowns": F.godowns, "GET /api/inventory/expiring": [] });
     const u = userEvent.setup();
     await u.click(await screen.findByRole("button", { name: "Add item" }));
     await u.type(screen.getByLabelText(/match patterns/), "([[bad");
@@ -245,5 +246,112 @@ describe("features added in re-verification", () => {
     await u.type(screen.getByLabelText(/Temporary password/), "Start@2026");
     await u.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Add person" }));
     await waitFor(() => expect(body).toMatchObject({ name: "Sunil", email: "sunil@demo.in", role: "SALES" }));
+  });
+});
+
+describe("remaining features: godowns, batches, purchases, licences, GPS, signup, Tally pull", () => {
+  it("transfer blocks same godown and posts the chosen item", async () => {
+    let body: unknown;
+    renderAt("/inventory", { "GET /api/inventory": F.inventory, "GET /api/godowns": F.godowns, "GET /api/inventory/expiring": [],
+      "GET /api/inventory/7": F.rc40Detail, "POST /api/transfers": (b: unknown) => { body = b; return { json: { number: "TRF-11" } }; } });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Transfer stock" }));
+    await u.selectOptions(screen.getByLabelText("To"), "1");
+    expect(screen.getByText("Choose two different godowns.")).toBeInTheDocument();
+    await u.selectOptions(screen.getByLabelText("To"), "2");
+    await u.selectOptions(screen.getByLabelText("Item"), "7");
+    const q = screen.getByLabelText("Quantity"); await u.clear(q); await u.type(q, "4");
+    await u.click(screen.getByRole("button", { name: "Transfer" }));
+    await waitFor(() => expect(body).toEqual({ fromGodownId: 1, toGodownId: 2, lines: [{ productId: 7, qty: 4 }] }));
+  });
+
+  it("batch item adjustment requires choosing a batch", async () => {
+    renderAt("/inventory", { "GET /api/inventory": [F.pharmaItem], "GET /api/godowns": [F.godowns[0]], "GET /api/inventory/expiring": [],
+      "GET /api/inventory/21": F.pharmaDetail });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Adjust" }));
+    await u.type(screen.getByLabelText("Change in quantity"), "-5");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await u.selectOptions(await screen.findByLabelText("Batch"), "301");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("creates a purchase order from a reorder suggestion", async () => {
+    let body: unknown;
+    renderAt("/purchases", { "GET /api/purchases": [], "GET /api/purchases/suggestions": F.suggestions, "GET /api/suppliers": F.suppliers,
+      "GET /api/godowns": F.godowns, "GET /api/inventory": F.inventory,
+      "POST /api/purchases": (b: unknown) => { body = b; return { json: { id: 9, number: 301 } }; }, "GET /api/purchases/9": { ...F.poDetail, status: "DRAFT" } });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Order" }));
+    await u.click(screen.getByRole("button", { name: "Save draft" }));
+    await waitFor(() => expect(body).toMatchObject({ supplierId: 2, godownId: 1, lines: [{ productId: 7, qty: 44, rate: 2100 }] }));
+    expect(await screen.findByRole("button", { name: "Send to supplier" })).toBeInTheDocument();
+  });
+
+  it("goods receipt for a batch item needs batch number and expiry", async () => {
+    let body: unknown;
+    renderAt("/purchases", { "GET /api/purchases": [{ ...F.poDetail }], "GET /api/purchases/suggestions": [], "GET /api/suppliers": F.suppliers,
+      "GET /api/godowns": F.godowns, "GET /api/purchases/9": F.poDetail,
+      "POST /api/purchases/9/receive": (b: unknown) => { body = b; return { json: { grn: "GRN-61", status: "PARTIAL" } }; } });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Open" }));
+    await u.type(await screen.findByLabelText("Quantity received for INS30"), "30");
+    expect(screen.getByText(/Batch number and expiry are needed/)).toBeInTheDocument();
+    await u.type(screen.getByLabelText("Batch number for INS30"), "IN27A01");
+    await u.type(screen.getByLabelText("Expiry for INS30"), "2027-11-30");
+    await u.click(screen.getByRole("button", { name: "Save goods receipt" }));
+    await waitFor(() => expect(body).toEqual({ lines: [{ poLineId: 91, qty: 30, batchNo: "IN27A01", expiryDate: "2027-11-30" }] }));
+  });
+
+  it("blocks a prescription order when the drug licence has expired", async () => {
+    const draft = { lines: [{ raw: "amox 500 x 20", qty: 20, productId: 21, sku: "AMX500", name: "Amoxicillin 500 mg", rate: 82.8, gstRate: 12, free: 580, requiresLicence: true }],
+      credit: { limit: 100000, outstanding: 26750, openOrders: 0, oldestDays: 48 }, godownId: 1, licence: { number: "MH-PZ3-445566", expiry: "2026-11-14" } };
+    renderAt("/inbox", { "GET /api/inbox": [F.inbox[0]], "GET /api/inbox/1": F.thread1, "GET /api/inbox/1/draft": draft, "GET /api/inventory": F.inventory, "GET /api/godowns": [F.godowns[0]] });
+    expect(await screen.findByText(/Drug licence MH-PZ3-445566 expired/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm & reply on WhatsApp" })).toBeDisabled();
+  });
+
+  it("delivery staff share live location from the Field screen", async () => {
+    const calls = renderAt("/field", { "GET /api/field": F.field, "GET /api/field/visits/today": [], "POST /api/field/location": { stored: true } }, "DELIVERY");
+    const watch = vi.fn((ok: PositionCallback) => { ok({ coords: { latitude: 18.52, longitude: 73.85, accuracy: 9 } } as GeolocationPosition); return 1; });
+    Object.defineProperty(navigator, "geolocation", { configurable: true, value: { watchPosition: watch, clearWatch: vi.fn() } });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Share while on duty" }));
+    await waitFor(() => expect(calls.find(c => c.url === "/api/field/location")?.body).toEqual({ lat: 18.52, lng: 73.85, accuracy: 9 }));
+  });
+
+  it("owner sees who is live", async () => {
+    renderAt("/field", { "GET /api/field": F.field, "GET /api/field/visits/today": [],
+      "GET /api/field/live": [{ userId: 3, name: "Amit Jadhav", role: "SALES", lat: 18.5, lng: 73.9, recordedAt: "2026-11-24T05:00:00Z", ageSeconds: 40, pointsToday: 22 }] });
+    expect(await screen.findByText("Team on the move")).toBeInTheDocument();
+    expect(screen.getByText("Live")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Where now" })).toHaveAttribute("href", "https://www.google.com/maps?q=18.5,73.9");
+  });
+
+  it("pulls items and customers from Tally", async () => {
+    let body: unknown;
+    renderAt("/tally", { "GET /api/tally": F.tally, "POST /api/tally/pull": (b: unknown) => { body = b; return { json: { summary: "4 items (2 new)" } }; } });
+    const u = userEvent.setup();
+    await u.click(await screen.findByLabelText(/Also set stock/));
+    await u.click(screen.getByRole("button", { name: "Pull items and customers" }));
+    await waitFor(() => expect(body).toEqual({ applyStock: true }));
+    expect(await screen.findByText("Pulled: 4 items (2 new)")).toBeInTheDocument();
+  });
+
+  it("new business signs up when signup is open", async () => {
+    setToken(null);
+    let body: unknown;
+    mockApi({ "GET /api/signup": { enabled: true }, "GET /api/dashboard": F.dashboard,
+      "POST /api/signup": (b: unknown) => { body = b; return { json: { token: "new", user: { ...F.me, name: "Founder Shah", tenantName: "New Traders" } } }; } });
+    render(<MemoryRouter><ToastProvider><App /></ToastProvider></MemoryRouter>);
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: /Create an account/ }));
+    await u.type(screen.getByLabelText("Business name"), "New Traders");
+    await u.type(screen.getByLabelText("Your name"), "Founder Shah");
+    await u.type(screen.getByLabelText("Email"), "f@new.example");
+    await u.type(screen.getByLabelText(/Password/), "Start@2026");
+    await u.click(screen.getByRole("button", { name: "Create account" }));
+    await waitFor(() => expect(body).toMatchObject({ businessName: "New Traders", email: "f@new.example" }));
+    expect(await screen.findByText("Hello, Founder")).toBeInTheDocument();
   });
 });

@@ -5,7 +5,7 @@ import { Loading, Meter, Modal, PageTop, Pill, useAction, useApi } from "../comp
 import { inr, lakh, n } from "../format";
 import { can, useUser } from "../App";
 
-interface Customer { id: number; name: string; town?: string; phone: string; gstin?: string; salespersonId?: number; creditLimit: number; tierCode: string; tierName: string;
+interface Customer { id: number; name: string; town?: string; phone: string; gstin?: string; salespersonId?: number; drugLicenceNo?: string; drugLicenceExpiry?: string; creditLimit: number; tierCode: string; tierName: string;
   tierDiscount: number; salesperson?: string; outstanding: number; oldestDays: number; openOrders: number; exposure: number; specialSkus?: string }
 interface Tier { code: string; name: string; discount: number }
 
@@ -41,7 +41,9 @@ export default function Customers() {
               const bad = r > 1 || c.oldestDays > 90, warn = r > 0.85 || c.oldestDays > 60;
               return (<tr key={c.id}>
                 <td>{c.name}<span className="sub">{[c.town, "+" + c.phone, c.salesperson].filter(Boolean).join(" · ")}</span></td>
-                <td>{c.tierName}{n(c.tierDiscount) > 0 ? ` (−${n(c.tierDiscount)}%)` : ""}{c.specialSkus && <span className="sub">Special rates: {c.specialSkus}</span>}</td>
+                <td>{c.tierName}{n(c.tierDiscount) > 0 ? ` (−${n(c.tierDiscount)}%)` : ""}{c.specialSkus && <span className="sub">Special rates: {c.specialSkus}</span>}
+                  {c.drugLicenceNo && <span className="sub" style={c.drugLicenceExpiry && new Date(c.drugLicenceExpiry) < new Date(new Date().toDateString()) ? { color: "var(--bad)" } : undefined}>
+                    DL {c.drugLicenceNo}{c.drugLicenceExpiry ? ` · until ${new Date(c.drugLicenceExpiry).toLocaleDateString("en-IN")}` : ""}</span>}</td>
                 <td className="r num">{lakh(c.creditLimit)}</td><td className="r num">{lakh(c.exposure)}</td>
                 <td><Meter ratio={r} /><span className="sub">{Math.round(r * 100)}%</span></td>
                 <td className="r num">{c.oldestDays} d</td>
@@ -113,13 +115,15 @@ function AddModal({ phone, tiers, onClose, onDone }: { phone: string; tiers: Tie
 
 function DetailsModal({ c, onClose, onDone }: { c: Customer; onClose: () => void; onDone: () => void }) {
   const sps = useApi(s => api<{ id: number; name: string }[]>("/api/field/salespeople", { signal: s }));
-  const [f, setF] = useState({ name: c.name, town: c.town ?? "", gstin: c.gstin ?? "", salespersonId: c.salespersonId ? String(c.salespersonId) : "" });
+  const [f, setF] = useState({ name: c.name, town: c.town ?? "", gstin: c.gstin ?? "", salespersonId: c.salespersonId ? String(c.salespersonId) : "",
+    drugLicenceNo: c.drugLicenceNo ?? "", drugLicenceExpiry: c.drugLicenceExpiry ?? "" });
   const { busy, run } = useAction();
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   async function submit(e: FormEvent) {
     e.preventDefault();
     await run(() => put(`/api/customers/${c.id}`, { name: f.name, town: f.town || undefined, gstin: f.gstin || undefined,
-      salespersonId: f.salespersonId ? Number(f.salespersonId) : undefined }), "Saved").then(onDone).catch(() => {});
+      salespersonId: f.salespersonId ? Number(f.salespersonId) : undefined,
+      drugLicenceNo: f.drugLicenceNo || undefined, drugLicenceExpiry: f.drugLicenceExpiry || undefined }), "Saved").then(onDone).catch(() => {});
   }
   return (
     <Modal title="Customer details" onClose={onClose}>
@@ -127,6 +131,10 @@ function DetailsModal({ c, onClose, onDone }: { c: Customer; onClose: () => void
         <label className="field" htmlFor="d-n">Shop name<input id="d-n" required maxLength={200} value={f.name} onChange={set("name")} /></label>
         <label className="field" htmlFor="d-t">Town / area<input id="d-t" maxLength={100} value={f.town} onChange={set("town")} /></label>
         <label className="field" htmlFor="d-g">GSTIN<input id="d-g" maxLength={15} value={f.gstin} onChange={set("gstin")} /></label>
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label className="field" htmlFor="d-dl">Drug licence no.<input id="d-dl" maxLength={60} value={f.drugLicenceNo} onChange={set("drugLicenceNo")} /></label>
+          <label className="field" htmlFor="d-dle">Licence valid until<input id="d-dle" type="date" value={f.drugLicenceExpiry} onChange={set("drugLicenceExpiry")} /></label>
+        </div>
         <label className="field" htmlFor="d-s">Salesperson<select id="d-s" value={f.salespersonId} onChange={set("salespersonId")}>
           <option value="">None</option>{sps.data?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <div className="actions" style={{ margin: 0 }}><button className="btn pri" disabled={busy}>Save</button><button type="button" className="btn" onClick={onClose}>Cancel</button></div>

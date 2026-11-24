@@ -18,6 +18,8 @@ export default function NewOrder({ onClose, onDone }: { onClose: () => void; onD
   const [source, setSource] = useState(user.role === "SALES" ? "SALESPERSON" : "PHONE");
   const [lines, setLines] = useState<Line[]>([{ productId: "", qty: 1 }]);
   const [override, setOverride] = useState(false);
+  const godowns = useApi(s => api<{ id: number; name: string; isDefault: boolean }[]>("/api/godowns", { signal: s }));
+  const [godownId, setGodownId] = useState<number | "">("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -36,7 +38,7 @@ export default function NewOrder({ onClose, onDone }: { onClose: () => void; onD
     setBusy(true); setErr("");
     try {
       const r = await post<{ number: number; total: number; backorders: string[] }>("/api/orders", {
-        customerId, source, overrideCredit: override,
+        customerId, source, overrideCredit: override, godownId: godownId || undefined,
         lines: lines.filter(l => l.productId !== "" && l.qty > 0).map(l => ({ productId: l.productId, qty: l.qty })),
       });
       toast(`SO-${r.number} confirmed for ${inr(r.total)}` + (r.backorders.length ? `. Back-order: ${r.backorders.join(", ")}` : ""));
@@ -60,6 +62,9 @@ export default function NewOrder({ onClose, onDone }: { onClose: () => void; onD
         <label className="field" htmlFor="no-s">Taken by
           <select id="no-s" value={source} onChange={e => setSource(e.target.value)}>
             <option value="SALESPERSON">Salesperson visit</option><option value="PHONE">Phone call</option></select></label>
+        {(godowns.data?.length ?? 0) > 1 && <label className="field" htmlFor="no-g">Ship from
+          <select id="no-g" value={godownId} onChange={e => setGodownId(e.target.value ? Number(e.target.value) : "")}>
+            {godowns.data!.map(g => <option key={g.id} value={g.isDefault ? "" : g.id}>{g.name}</option>)}</select></label>}
         <div style={{ display: "grid", gap: 8 }}>
           {lines.map((l, i) => {
             const it = items.data?.find(x => x.id === l.productId);

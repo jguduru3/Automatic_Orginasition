@@ -44,3 +44,14 @@ export const tally = { mode: "mock", autoSync: false, mapping: { salesLedger: "S
   queue: [{ id: 1, type: "SALES", ref: "INV-2304", party: "Mahalaxmi Electricals", amount: 58200 }], failed: [], log: [], postedToday: 0 };
 export const field = { salespeople: [{ id: 3, name: "Amit Jadhav", beat: "Hadapsar", target: 2400000, visitsToday: 2, salesMtd: 1850000, collectedMtd: 1240000, lastCheckIn: "Mahalaxmi · 10:48" }],
   deliveries: [{ id: 40, number: 1033, status: "DISPATCHED", total: 42000, customer: "New India Lighting", town: "Camp", vehicle: "MH12 AB 4521", vehicleType: "Tata Ace", driver: "Raju Pawar", invoice: "INV-2305" }] };
+export const godowns = [{ id: 1, code: "MAIN", name: "Hadapsar godown", isDefault: true }, { id: 2, code: "CHK", name: "Chakan branch", isDefault: false }];
+export const rc40Detail = { id: 7, sku: "RC40", name: "RCCB 40A 4P 30mA", batchTracked: false,
+  godowns: [{ godownId: 1, godown: "Hadapsar godown", onHand: 22, reserved: 6 }, { godownId: 2, godown: "Chakan branch", onHand: 10, reserved: 0 }], batches: [] };
+export const pharmaItem = { id: 21, sku: "AMX500", name: "Amoxicillin 500 mg", unit: "strip", category: "Antibiotic", listRate: 92, reorderLevel: 200,
+  onHand: 580, reserved: 0, free: 580, gstRate: 12, batchTracked: true, requiresLicence: true, nextExpiry: "2027-02-01", expired: 0 };
+export const pharmaDetail = { id: 21, sku: "AMX500", name: "Amoxicillin 500 mg", batchTracked: true, godowns: [{ godownId: 1, godown: "Main store", onHand: 580, reserved: 0 }],
+  batches: [{ id: 301, batchNo: "AM25C02", expiryDate: "2027-02-01", onHand: 180, reserved: 0, godown: "Main store", godownId: 1, expired: false, daysLeft: 75 }] };
+export const suggestions = [{ productId: 7, sku: "RC40", name: "RCCB 40A 4P 30mA", reorderLevel: 30, free: 16, onOrder: 0, suggestedQty: 44, lastSupplierId: 2, lastRate: 2100, listRate: 2650 }];
+export const suppliers = [{ id: 2, name: "Sure Switchgear Distributors", phone: "919822022200", leadDays: 2, openOrders: 1 }];
+export const poDetail = { id: 9, number: 301, status: "SENT", total: 109032, supplier: "Medisupply C&F", godown: "Cold room", late: false, subtotal: 97350, tax: 11682,
+  lines: [{ id: 91, productId: 24, sku: "INS30", name: "Insulin 30/70", batchTracked: true, qty: 50, receivedQty: 0, rate: 118 }], receipts: [] };

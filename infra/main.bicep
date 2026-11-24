@@ -35,6 +35,14 @@ param loadDemoData bool = false
 param postgresSku string = 'Standard_B1ms'
 param postgresTier string = 'Burstable'
 param apiMinReplicas int = 1
+@description('Create Azure AI Speech (voice-note transcription) and Azure AI Vision (photo order reading).')
+param enableAi bool = true
+@description('Language for voice notes, e.g. hi-IN, mr-IN, en-IN')
+param speechLanguage string = 'hi-IN'
+param signupEnabled bool = false
+param whatsappReminderTemplate string = ''
+param whatsappDispatchTemplate string = ''
+param whatsappPoTemplate string = ''
 param apiMaxReplicas int = 5
 
 var suffix = uniqueString(resourceGroup().id)
@@ -136,6 +144,22 @@ resource pgAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2022-1
   properties: { startIpAddress: '0.0.0.0', endIpAddress: '0.0.0.0' }
 }
 
+resource speech 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableAi) {
+  name: '${prefix}-speech-${suffix}'
+  location: location
+  kind: 'SpeechServices'
+  sku: { name: 'S0' }
+  properties: { customSubDomainName: '${prefix}-speech-${suffix}', publicNetworkAccess: 'Enabled' }
+}
+
+resource vision 'Microsoft.CognitiveServices/accounts@2023-05-01' = if (enableAi) {
+  name: '${prefix}-vision-${suffix}'
+  location: location
+  kind: 'ComputerVision'
+  sku: { name: 'S1' }
+  properties: { customSubDomainName: '${prefix}-vision-${suffix}', publicNetworkAccess: 'Enabled' }
+}
+
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${prefix}-env'
   location: location
@@ -167,6 +191,8 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
         { name: 'wa-token', value: empty(whatsappAccessToken) ? 'unset' : whatsappAccessToken }
         { name: 'wa-secret', value: empty(whatsappAppSecret) ? 'unset' : whatsappAppSecret }
         { name: 'wa-verify', value: empty(whatsappVerifyToken) ? 'unset' : whatsappVerifyToken }
+        { name: 'speech-key', value: enableAi ? speech.listKeys().key1 : 'unset' }
+        { name: 'vision-key', value: enableAi ? vision.listKeys().key1 : 'unset' }
       ]
     }
     template: {
@@ -194,6 +220,15 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
           { name: 'TALLY_AUTO_SYNC', value: tallyMode == 'http' ? 'true' : 'false' }
           { name: 'SIMULATE_ENABLED', value: loadDemoData ? 'true' : 'false' }
           { name: 'SWAGGER_ENABLED', value: 'false' }
+          { name: 'SIGNUP_ENABLED', value: signupEnabled ? 'true' : 'false' }
+          { name: 'AZURE_SPEECH_KEY', secretRef: 'speech-key' }
+          { name: 'AZURE_SPEECH_REGION', value: location }
+          { name: 'AZURE_SPEECH_LANGUAGE', value: speechLanguage }
+          { name: 'AZURE_VISION_ENDPOINT', value: enableAi ? vision.properties.endpoint : '' }
+          { name: 'AZURE_VISION_KEY', secretRef: 'vision-key' }
+          { name: 'WHATSAPP_REMINDER_TEMPLATE', value: whatsappReminderTemplate }
+          { name: 'WHATSAPP_DISPATCH_TEMPLATE', value: whatsappDispatchTemplate }
+          { name: 'WHATSAPP_PO_TEMPLATE', value: whatsappPoTemplate }
           { name: 'DB_POOL_SIZE', value: '15' }
         ]
         probes: [

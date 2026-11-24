@@ -18,9 +18,17 @@ public class TallyController {
     private final JdbcClient db;
     private final TallySyncService sync;
     private final AppProperties props;
+    private final TallyPullService pull;
 
-    public TallyController(JdbcClient db, TallySyncService sync, AppProperties props) {
-        this.db = db; this.sync = sync; this.props = props;
+    public TallyController(JdbcClient db, TallySyncService sync, AppProperties props, TallyPullService pull) {
+        this.db = db; this.sync = sync; this.props = props; this.pull = pull;
+    }
+
+    public record Pull(boolean applyStock) {}
+
+    @PostMapping("/pull")
+    public Map<String, Object> pull(@AuthenticationPrincipal AuthUser u, @RequestBody(required = false) Pull in) {
+        return pull.pull(u.tenantId(), u.userId(), in != null && in.applyStock());
     }
 
     @GetMapping
@@ -43,6 +51,11 @@ public class TallyController {
                 SELECT id, voucher_type AS type, ref, party, amount, tally_voucher_no AS "voucherNo", posted_at AS "postedAt"
                 FROM tally_outbox WHERE tenant_id = :t AND status = 'POSTED' ORDER BY posted_at DESC LIMIT 50
                 """).param("t", u.tenantId()).query().listOfRows());
+        db.sql("SELECT tally_last_pull_at, tally_last_pull_summary FROM tenants WHERE id = :t").param("t", u.tenantId())
+                .query().listOfRows().forEach(r -> {
+                    if (r.get("tally_last_pull_at") != null) m.put("lastPullAt", r.get("tally_last_pull_at"));
+                    if (r.get("tally_last_pull_summary") != null) m.put("lastPullSummary", r.get("tally_last_pull_summary"));
+                });
         m.put("postedToday", db.sql("""
                 SELECT count(*) FROM tally_outbox WHERE tenant_id = :t AND status = 'POSTED' AND posted_at >= date_trunc('day', now())
                 """).param("t", u.tenantId()).query(Long.class).single());

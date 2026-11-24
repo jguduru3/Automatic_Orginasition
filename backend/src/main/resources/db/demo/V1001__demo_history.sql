@@ -14,9 +14,10 @@ UPDATE _hist h SET number = 900000 + x.rn FROM (SELECT day, k, row_number() OVER
 WHERE x.day = h.day AND x.k = h.k;
 
 INSERT INTO sales_orders (tenant_id, number, customer_id, source, status, salesperson_id, subtotal, tax, total,
-                          created_at, packed_at, dispatched_at, delivered_at)
+                          created_at, packed_at, dispatched_at, delivered_at, godown_id)
 SELECT tenant_id, number, customer_id, source, 'DELIVERED', salesperson_id, 0, 0, 0,
-       day + time '10:00' + (k * interval '35 minutes'), day + time '13:00', day + time '15:00', day + time '18:00'
+       day + time '10:00' + (k * interval '35 minutes'), day + time '13:00', day + time '15:00', day + time '18:00',
+       (SELECT id FROM godowns g WHERE g.tenant_id = _hist.tenant_id AND g.is_default)
 FROM _hist;
 
 UPDATE _hist h SET order_id = o.id FROM sales_orders o WHERE o.number = h.number AND o.tenant_id = h.tenant_id;

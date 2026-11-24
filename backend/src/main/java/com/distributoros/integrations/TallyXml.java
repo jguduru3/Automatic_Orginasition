@@ -29,7 +29,7 @@ public final class TallyXml {
 
     private static String amt(BigDecimal v) { return v.setScale(2, RoundingMode.HALF_UP).toPlainString(); }
 
-    private static String envelope(String company, String voucher) {
+    public static String envelope(String company, String voucher) {
         String sv = company == null || company.isBlank() ? "" :
                 "<STATICVARIABLES><SVCURRENTCOMPANY>" + esc(company) + "</SVCURRENTCOMPANY></STATICVARIABLES>";
         return "<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA>"

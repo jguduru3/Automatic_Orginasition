@@ -1,7 +1,8 @@
 # DistributorOS
 
-Wholesale distribution operating system: WhatsApp order capture, live stock reservation, customer pricing and credit
-limits, collections, field and delivery tracking, and Tally sync.
+Wholesale distribution operating system: WhatsApp order capture (text, voice notes, photos), live stock reservation
+across godowns with batch/expiry, customer pricing, credit limits and drug licences, purchases and goods receipt,
+collections, live field and delivery tracking, and two-way Tally integration.
 
 | Part | Stack |
 | --- | --- |
@@ -20,6 +21,7 @@ docker compose up --build
 ```
 
 Demo logins (password `Demo@1234`): `owner@demo.in`, `accounts@demo.in`, `amit@demo.in` (sales), `raju@demo.in` (delivery).
+Pharma demo (batches, expiry, licences, cold room): `owner@pharma.demo.in`, `sales@pharma.demo.in`.
 The demo tenant and data load only when `FLYWAY_LOCATIONS` includes `classpath:db/demo`.
 
 Without Docker: run Postgres 16 with a `dos` database, then `cd backend && mvn spring-boot:run` and
@@ -41,6 +43,11 @@ Without Docker: run Postgres 16 with a `dos` database, then `cd backend && mvn s
 - **Credit:** exposure = unpaid invoices + open orders. An order that takes exposure over the limit returns
   `422 CREDIT_HOLD` unless the owner sends `overrideCredit: true` (logged).
 - **Payments:** clear the oldest bills first. `idempotencyKey` makes double taps and retries count once.
+- **Godowns and batches:** stock is held per item per godown. Batch-tracked items reserve first-expiry-first-out and
+  never sell expired stock. Items marked as needing a licence can't be sold to customers with a missing or expired
+  drug licence.
+- **Purchases:** reorder suggestions → purchase order → WhatsApp to supplier → goods receipt (with batch and expiry) →
+  stock in and a Purchase voucher for Tally.
 - **Tally:** invoices and receipts are written to `tally_outbox` in the same transaction as the business change and
   posted by `POST /api/tally/sync` or the scheduled worker (`TALLY_AUTO_SYNC=true`), using `FOR UPDATE SKIP LOCKED`.
 - **WhatsApp:** `POST /api/webhooks/whatsapp` checks Meta's `X-Hub-Signature-256` HMAC, de-duplicates by message id,
@@ -57,6 +64,11 @@ Without Docker: run Postgres 16 with a `dos` database, then `cd backend && mvn s
 | `BLOB_MODE` | `local` | `azure` uses `AZURE_STORAGE_CONNECTION_STRING` or `AZURE_STORAGE_ACCOUNT_URL` + managed identity |
 | `SIMULATE_ENABLED` | `true` | Turn off in production; it lets users inject test WhatsApp messages |
 | `LOGIN_RATE_LIMIT` | `10` | Attempts per IP and email per 5 minutes |
+| `SIGNUP_ENABLED` | `false` | Lets new businesses create an account |
+| `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_LANGUAGE` | off | Voice-note transcription (Bicep creates the resource) |
+| `AZURE_VISION_ENDPOINT`, `AZURE_VISION_KEY` | off | Reading photos of handwritten order lists |
+| `WHATSAPP_REMINDER_TEMPLATE`, `WHATSAPP_DISPATCH_TEMPLATE`, `WHATSAPP_PO_TEMPLATE` | plain text | Approved Meta templates for messages outside the 24-hour window |
+| `TALLY_PURCHASE_LEDGER`, `TALLY_INPUT_CGST_LEDGER`, `TALLY_INPUT_SGST_LEDGER`, `TALLY_DEBTORS_GROUP` | see application.yml | Tally ledger names |
 
 ## Deploy to Azure
 
@@ -77,9 +89,10 @@ reached through the app's managed identity.
 
 ```bash
 cd backend && mvn verify            # unit + Testcontainers integration + concurrency tests (needs Docker)
-cd frontend && npm test             # 31 component and logic tests
+cd frontend && npm test             # 40 component and logic tests
 bash load-tests/pgbench/run.sh      # DB concurrency invariants (needs a migrated + seeded "dos" database)
-python3 tools/check_sql.py backend/src/main/java postgresql://...   # PREPAREs every SQL statement
+python3 tools/check_sql.py backend/src/main/java postgresql://...           # PREPAREs every SQL statement
+python3 tools/check_dynamic_sql.py backend/src/main/java postgresql://...   # and every assembled variant
 docker compose up -d --wait && (cd e2e && npm ci && npx playwright test) && for s in load-tests/k6/*.js; do k6 run $s; done
 ```
 

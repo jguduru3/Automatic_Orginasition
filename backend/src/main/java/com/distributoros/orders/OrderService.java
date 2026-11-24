@@ -1,5 +1,6 @@
 package com.distributoros.orders;
 
+import com.distributoros.catalog.StockService;
 import com.distributoros.common.Activity;
 import com.distributoros.common.ApiException;
 import com.distributoros.common.DocNumbers;
@@ -35,11 +36,13 @@ public class OrderService {
     private final ApplicationEventPublisher events;
     private final BlobStorage blobs;
     private final AppProperties props;
+    private final StockService stock;
 
     public OrderService(JdbcClient db, PricingService pricing, CreditService credit, DocNumbers numbers,
-                        Activity activity, ApplicationEventPublisher events, BlobStorage blobs, AppProperties props) {
+                        Activity activity, ApplicationEventPublisher events, BlobStorage blobs, AppProperties props,
+                        StockService stock) {
         this.db = db; this.pricing = pricing; this.credit = credit; this.numbers = numbers;
-        this.activity = activity; this.events = events; this.blobs = blobs; this.props = props;
+        this.activity = activity; this.events = events; this.blobs = blobs; this.props = props; this.stock = stock;
     }
 
     public record LineRequest(long productId, int qty) {}
@@ -60,6 +63,12 @@ public class OrderService {
     @Transactional
     public CreatedOrder create(AuthUser u, long customerId, String source, Long conversationId,
                                List<LineRequest> requested, boolean overrideCredit) {
+        return create(u, customerId, source, conversationId, requested, overrideCredit, null);
+    }
+
+    @Transactional
+    public CreatedOrder create(AuthUser u, long customerId, String source, Long conversationId,
+                               List<LineRequest> requested, boolean overrideCredit, Long godownIdOrNull) {
         if (requested == null || requested.isEmpty()) throw ApiException.badRequest("NO_LINES", "Add at least one item");
         if (requested.size() > 100) throw ApiException.badRequest("TOO_MANY_LINES", "An order can have at most 100 lines");
         if (overrideCredit && !u.isOwner()) {
@@ -72,29 +81,27 @@ public class OrderService {
             qtyByProduct.merge(l.productId(), l.qty(), Integer::sum);
         }
         credit.lockCustomer(u.tenantId(), customerId);
-        Map<Long, PricingService.Quote> quotes = pricing.quote(u.tenantId(), customerId, qtyByProduct.keySet());
+        long godownId = stock.godown(u.tenantId(), godownIdOrNull);
+        Map<Long, PricingService.Quote> quotes = pricing.quote(u.tenantId(), customerId, godownId, qtyByProduct.keySet());
         if (quotes.size() != qtyByProduct.size()) throw ApiException.badRequest("BAD_PRODUCT", "One or more items do not exist");
+        checkLicence(u.tenantId(), customerId, quotes.values());
 
-        record Line(long productId, int qty, int backorder, BigDecimal rate, BigDecimal gst, BigDecimal amount) {}
+        record Line(long productId, int qty, int backorder, BigDecimal rate, BigDecimal gst, BigDecimal amount,
+                    List<StockService.BatchTake> batches) {}
         List<Line> lines = new ArrayList<>();
         List<String> backorders = new ArrayList<>();
         BigDecimal subtotal = BigDecimal.ZERO, tax = BigDecimal.ZERO;
         for (var e : qtyByProduct.entrySet()) {          // TreeMap: ascending product id = consistent lock order
             long pid = e.getKey();
             int want = e.getValue();
-            Integer free = db.sql("SELECT on_hand - reserved FROM stock WHERE product_id = :p AND tenant_id = :t FOR UPDATE")
-                    .param("p", pid).param("t", u.tenantId()).query(Integer.class).optional().orElse(0);
-            int take = Math.max(0, Math.min(want, free));
-            if (take > 0) {
-                db.sql("UPDATE stock SET reserved = reserved + :q, updated_at = now() WHERE product_id = :p")
-                        .param("q", take).param("p", pid).update();
-            }
+            StockService.Reservation res = stock.reserve(u.tenantId(), pid, godownId, want);
+            int take = res.taken();
             PricingService.Quote q = quotes.get(pid);
             BigDecimal amount = q.rate().multiply(BigDecimal.valueOf(take));
             subtotal = subtotal.add(amount);
             tax = tax.add(amount.multiply(q.gstRate()).movePointLeft(2));
             if (take < want) backorders.add((want - take) + " x " + q.name());
-            lines.add(new Line(pid, want, want - take, q.rate(), q.gstRate(), Money.paise(amount)));
+            lines.add(new Line(pid, want, want - take, q.rate(), q.gstRate(), Money.paise(amount), res.batches()));
         }
         if (subtotal.signum() == 0) {
             throw ApiException.conflict("OUT_OF_STOCK", "None of these items are in stock");
@@ -114,19 +121,20 @@ public class OrderService {
         if ("SALES".equals(u.role())) sp = u.userId();
         long orderId = db.sql("""
                 INSERT INTO sales_orders (tenant_id, number, customer_id, source, status, conversation_id, salesperson_id,
-                                          created_by, subtotal, tax, total, credit_override_by)
-                VALUES (:t, :n, :c, :src, 'CONFIRMED', :conv, :sp, :u, :sub, :tax, :tot, :ov) RETURNING id
+                                          created_by, subtotal, tax, total, credit_override_by, godown_id)
+                VALUES (:t, :n, :c, :src, 'CONFIRMED', :conv, :sp, :u, :sub, :tax, :tot, :ov, :g) RETURNING id
                 """).param("t", u.tenantId()).param("n", number).param("c", customerId).param("src", source)
                 .param("conv", conversationId).param("sp", sp).param("u", u.userId())
                 .param("sub", subtotal).param("tax", tax).param("tot", total)
-                .param("ov", c.wouldExceed(total) ? u.userId() : null)
+                .param("ov", c.wouldExceed(total) ? u.userId() : null).param("g", godownId)
                 .query(Long.class).single();
         for (Line l : lines) {
-            db.sql("""
+            long lineId = db.sql("""
                     INSERT INTO order_lines (order_id, product_id, qty, backorder_qty, rate, gst_rate, amount)
-                    VALUES (:o, :p, :q, :b, :r, :g, :a)
+                    VALUES (:o, :p, :q, :b, :r, :g, :a) RETURNING id
                     """).param("o", orderId).param("p", l.productId()).param("q", l.qty()).param("b", l.backorder())
-                    .param("r", l.rate()).param("g", l.gst()).param("a", l.amount()).update();
+                    .param("r", l.rate()).param("g", l.gst()).param("a", l.amount()).query(Long.class).single();
+            stock.recordBatches(lineId, l.batches());
         }
         String customerName = db.sql("SELECT name FROM customers WHERE id = :c").param("c", customerId).query(String.class).single();
         activity.log(u.tenantId(), u.userId(), "ORDER_CONFIRMED",
@@ -136,9 +144,30 @@ public class OrderService {
         return new CreatedOrder(orderId, number, total, backorders);
     }
 
+    /** Prescription / scheduled items need a valid drug licence on file for the buyer. */
+    private void checkLicence(long tenantId, long customerId, java.util.Collection<PricingService.Quote> quotes) {
+        List<String> needs = quotes.stream().filter(PricingService.Quote::requiresLicence).map(PricingService.Quote::sku).toList();
+        if (needs.isEmpty()) return;
+        var r = db.sql("SELECT drug_licence_no, drug_licence_expiry FROM customers WHERE id = :c AND tenant_id = :t")
+                .param("c", customerId).param("t", tenantId).query().listOfRows().get(0);
+        Object exp = r.get("drug_licence_expiry");
+        boolean valid = r.get("drug_licence_no") != null && exp != null
+                && !((java.sql.Date) exp).toLocalDate().isBefore(LocalDate.now());
+        if (!valid) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "LICENCE_INVALID",
+                    "This customer's drug licence is missing or expired, so " + String.join(", ", needs) + " cannot be sold to them");
+        }
+    }
+
     /** WhatsApp flow: lock the conversation so a double tap cannot create two orders, create, then reply. */
     @Transactional
     public CreatedOrder confirmFromConversation(AuthUser u, long conversationId, List<LineRequest> lines, boolean override) {
+        return confirmFromConversation(u, conversationId, lines, override, null);
+    }
+
+    @Transactional
+    public CreatedOrder confirmFromConversation(AuthUser u, long conversationId, List<LineRequest> lines, boolean override,
+                                                Long godownId) {
         var conv = db.sql("""
                 SELECT id, customer_id, phone, status FROM conversations
                 WHERE id = :id AND tenant_id = :t FOR UPDATE
@@ -150,7 +179,7 @@ public class OrderService {
             throw ApiException.badRequest("UNKNOWN_CUSTOMER", "Add this phone number as a customer first");
         }
         long customerId = ((Number) cv.get("customer_id")).longValue();
-        CreatedOrder o = create(u, customerId, "WHATSAPP", conversationId, lines, override);
+        CreatedOrder o = create(u, customerId, "WHATSAPP", conversationId, lines, override, godownId);
         db.sql("UPDATE conversations SET status = 'CONVERTED', order_id = :o WHERE id = :id")
                 .param("o", o.id()).param("id", conversationId).update();
 
@@ -206,21 +235,11 @@ public class OrderService {
     public Map<String, Object> dispatch(AuthUser u, long id, long vehicleId) {
         Map<String, Object> o = lockOrder(u, id);
         if (!"PACKED".equals(o.get("status"))) throw wrongState(o, "dispatched");
-        var veh = db.sql("SELECT reg_no, driver_name FROM vehicles WHERE id = :v AND tenant_id = :t")
+        var veh = db.sql("SELECT reg_no, driver_name, driver_phone FROM vehicles WHERE id = :v AND tenant_id = :t")
                 .param("v", vehicleId).param("t", u.tenantId()).query().listOfRows();
         if (veh.isEmpty()) throw ApiException.badRequest("BAD_VEHICLE", "Vehicle not found");
 
-        var lines = db.sql("""
-                SELECT product_id, qty - backorder_qty AS q FROM order_lines WHERE order_id = :o AND qty > backorder_qty
-                ORDER BY product_id
-                """).param("o", id).query().listOfRows();
-        for (var l : lines) {
-            int n = db.sql("""
-                    UPDATE stock SET on_hand = on_hand - :q, reserved = reserved - :q, updated_at = now()
-                    WHERE product_id = :p AND reserved >= :q AND on_hand >= :q
-                    """).param("q", ((Number) l.get("q")).intValue()).param("p", ((Number) l.get("product_id")).longValue()).update();
-            if (n == 0) throw ApiException.conflict("STOCK_MISMATCH", "Reserved stock no longer matches this order");
-        }
+        stock.settleOrder(id, true);
         long invNo = numbers.next(u.tenantId(), "INV");
         BigDecimal total = Money.of(o.get("total"));
         long customerId = ((Number) o.get("customer_id")).longValue();
@@ -239,9 +258,11 @@ public class OrderService {
         db.sql("UPDATE sales_orders SET status = 'DISPATCHED', dispatched_at = now(), vehicle_id = :v WHERE id = :id")
                 .param("v", vehicleId).param("id", id).update();
         Map<String, Object> v = veh.get(0);
+        boolean driverAlerted = notifyDispatch(u.tenantId(), id, invRef, v);
         activity.log(u.tenantId(), u.userId(), "ORDER_DISPATCHED",
-                "SO-" + o.get("number") + " dispatched on " + v.get("reg_no") + ", " + invRef + " raised", "order", id);
-        return Map.of("invoice", invRef, "vehicle", v.get("reg_no"), "driver", v.get("driver_name"));
+                "SO-" + o.get("number") + " dispatched on " + v.get("reg_no") + ", " + invRef + " raised"
+                        + (driverAlerted ? ", driver alerted on WhatsApp" : ""), "order", id);
+        return Map.of("invoice", invRef, "vehicle", v.get("reg_no"), "driver", v.get("driver_name"), "driverAlerted", driverAlerted);
     }
 
     @Transactional
@@ -265,15 +286,40 @@ public class OrderService {
         Map<String, Object> o = lockOrder(u, id);
         String st = (String) o.get("status");
         if (!"CONFIRMED".equals(st) && !"PACKED".equals(st)) throw wrongState(o, "cancelled");
-        var lines = db.sql("""
-                SELECT product_id, qty - backorder_qty AS q FROM order_lines WHERE order_id = :o AND qty > backorder_qty
-                ORDER BY product_id
-                """).param("o", id).query().listOfRows();
-        for (var l : lines) {
-            db.sql("UPDATE stock SET reserved = reserved - :q, updated_at = now() WHERE product_id = :p AND reserved >= :q")
-                    .param("q", ((Number) l.get("q")).intValue()).param("p", ((Number) l.get("product_id")).longValue()).update();
-        }
+        stock.settleOrder(id, false);
         db.sql("UPDATE sales_orders SET status = 'CANCELLED' WHERE id = :id").param("id", id).update();
         activity.log(u.tenantId(), u.userId(), "ORDER_CANCELLED", "SO-" + o.get("number") + " cancelled, stock released", "order", id);
+    }
+
+    /**
+     * Tells the driver what to deliver (template if configured, as drivers are usually outside the 24-hour window)
+     * and tells the customer the order is on the way. Messages go out after commit.
+     */
+    private boolean notifyDispatch(long tenantId, long orderId, String invRef, Map<String, Object> vehicle) {
+        var o = db.sql("""
+                SELECT o.number, o.total, c.name, c.town, c.phone, o.conversation_id,
+                  (SELECT string_agg((l.qty - l.backorder_qty) || ' x ' || p.name, E'\n' ORDER BY l.id)
+                     FROM order_lines l JOIN products p ON p.id = l.product_id WHERE l.order_id = o.id AND l.qty > l.backorder_qty) AS items
+                FROM sales_orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = :o
+                """).param("o", orderId).query().listOfRows().get(0);
+        String so = "SO-" + o.get("number");
+        String total = inr(Money.of(o.get("total")));
+        boolean alerted = false;
+        String driverPhone = (String) vehicle.get("driver_phone");
+        if (driverPhone != null && !driverPhone.isBlank()) {
+            String body = "Delivery " + so + " / " + invRef + "\nTo: " + o.get("name") + ", " + o.get("town")
+                    + "\n" + o.get("items") + "\nCollect POD photo. Value " + total + ".";
+            String tpl = props.whatsapp().dispatchTemplate();
+            events.publishEvent(new OutboundMessage(tenantId, 0, driverPhone, body,
+                    tpl == null || tpl.isBlank() ? null : tpl,
+                    List.of(String.valueOf(vehicle.get("driver_name")), so, String.valueOf(o.get("name")), String.valueOf(o.get("town")))));
+            alerted = true;
+        }
+        Object conv = o.get("conversation_id");
+        if (conv != null) {
+            sendMessage(tenantId, ((Number) conv).longValue(), (String) o.get("phone"),
+                    so + " is out for delivery on " + vehicle.get("reg_no") + " (" + vehicle.get("driver_name") + "). Invoice " + invRef + ", " + total + ".");
+        }
+        return alerted;
     }
 }

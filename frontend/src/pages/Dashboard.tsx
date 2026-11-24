@@ -7,7 +7,7 @@ import { useUser } from "../App";
 
 type Row = Record<string, unknown>;
 interface Dash {
-  kpis: Row; lowStock: Row[]; dailySales: { day: string; value: number }[]; sources: Row[];
+  kpis: Row; lowStock: Row[]; expiry?: Row; purchases?: Row; dailySales: { day: string; value: number }[]; sources: Row[];
   aging: { label: string; value: unknown; bills: unknown }[]; creditRisk: Row[]; salespeople: Row[]; activity: Row[];
 }
 const SOURCE: Record<string, string> = { WHATSAPP: "WhatsApp", SALESPERSON: "Salesperson", PHONE: "Phone" };
@@ -42,6 +42,10 @@ export default function Dashboard() {
           ? <Pill tone="warn">{data.lowStock.slice(0, 4).map(r => String(r.sku)).join(", ")}</Pill>
           : <Pill tone="good">All above reorder</Pill>} />
       </div>
+      {(n(data.expiry?.batches) > 0 || n(data.purchases?.open) > 0) && <div className="grid g-kpi" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+        {n(data.expiry?.batches) > 0 && <Kpi label="Expired stock" value={lakh(data.expiry?.expiredValue)} detail={<Pill tone={n(data.expiry?.expiredValue) > 0 ? "bad" : "good"}>{lakh(data.expiry?.expiring90Value)} more expires in 90 days</Pill>} />}
+        {n(data.purchases?.open) > 0 && <Kpi label="Open purchase orders" value={lakh(data.purchases?.openValue)} detail={n(data.purchases?.late) > 0 ? <Pill tone="bad">{n(data.purchases?.late)} late</Pill> : `${n(data.purchases?.open)} with suppliers`} />}
+      </div>}
       <div className="grid g-2">
         <div className="card"><div className="card-h"><h2>Daily sales, incl. GST</h2><span className="hint">Working days, last 30 days + today</span></div>
           <LineChart data={series} label="Daily sales for the last 30 working days" /></div>

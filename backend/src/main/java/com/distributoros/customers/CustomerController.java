@@ -25,6 +25,7 @@ public class CustomerController {
 
     static final String LIST_SQL = """
             SELECT c.id, c.name, c.town, c.phone, c.gstin, c.credit_limit AS "creditLimit",
+                   c.drug_licence_no AS "drugLicenceNo", c.drug_licence_expiry AS "drugLicenceExpiry",
                    pt.code AS "tierCode", pt.name AS "tierName", pt.discount_pct AS "tierDiscount",
                    u.id AS "salespersonId", u.name AS "salesperson",
                    COALESCE(inv.outstanding, 0) AS outstanding,
@@ -97,15 +98,20 @@ public class CustomerController {
     }
 
     public record CustomerDetails(@NotBlank @Size(max = 200) String name, @Size(max = 100) String town,
-                                  @Size(max = 15) String gstin, Long salespersonId) {}
+                                  @Size(max = 15) String gstin, Long salespersonId,
+                                  @Size(max = 60) String drugLicenceNo, java.time.LocalDate drugLicenceExpiry) {}
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('OWNER','ACCOUNTANT')")
     @Transactional
     public Map<String, Object> update(@AuthenticationPrincipal AuthUser u, @PathVariable long id,
                                       @Valid @RequestBody CustomerDetails in) {
-        int n = db.sql("UPDATE customers SET name = :n, town = :town, gstin = :g, salesperson_id = :sp WHERE id = :id AND tenant_id = :t")
-                .param("n", in.name().trim()).param("town", in.town()).param("g", in.gstin())
+        int n = db.sql("""
+                UPDATE customers SET name = :n, town = :town, gstin = :g, salesperson_id = :sp,
+                       drug_licence_no = :dl, drug_licence_expiry = :dle WHERE id = :id AND tenant_id = :t
+                """).param("n", in.name().trim()).param("town", in.town()).param("g", in.gstin())
+                .param("dl", in.drugLicenceNo() == null || in.drugLicenceNo().isBlank() ? null : in.drugLicenceNo().trim())
+                .param("dle", in.drugLicenceExpiry())
                 .param("sp", salesperson(u.tenantId(), in.salespersonId())).param("id", id).param("t", u.tenantId()).update();
         if (n == 0) throw ApiException.notFound("Customer");
         return Map.of("ok", true);

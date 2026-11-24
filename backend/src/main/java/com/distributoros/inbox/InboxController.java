@@ -24,8 +24,38 @@ public class InboxController {
     private final JdbcClient db;
     private final AppProperties props;
 
-    public InboxController(InboxService inbox, OrderService orders, JdbcClient db, AppProperties props) {
-        this.inbox = inbox; this.orders = orders; this.db = db; this.props = props;
+    private final com.distributoros.integrations.MediaReader reader;
+    private final com.distributoros.storage.BlobStorage blobs;
+
+    public InboxController(InboxService inbox, OrderService orders, JdbcClient db, AppProperties props,
+                           com.distributoros.integrations.MediaReader reader, com.distributoros.storage.BlobStorage blobs) {
+        this.inbox = inbox; this.orders = orders; this.db = db; this.props = props; this.reader = reader; this.blobs = blobs;
+    }
+
+    /** Re-runs transcription / photo reading on a stored voice note or image (e.g. after enabling Azure AI). */
+    @PostMapping("/messages/{messageId}/read")
+    public Map<String, Object> readMedia(@AuthenticationPrincipal AuthUser u, @PathVariable long messageId) {
+        var rows = db.sql("SELECT kind, media_blob FROM messages WHERE id = :m AND tenant_id = :t AND direction = 'IN'")
+                .param("m", messageId).param("t", u.tenantId()).query().listOfRows();
+        if (rows.isEmpty() || rows.get(0).get("media_blob") == null) throw ApiException.notFound("Voice note or photo");
+        String kind = (String) rows.get(0).get("kind");
+        if ("VOICE".equals(kind) ? !reader.canTranscribe() : !reader.canRead()) {
+            throw ApiException.conflict("AI_OFF", "VOICE".equals(kind)
+                    ? "Voice transcription is not set up (AZURE_SPEECH_KEY)" : "Photo reading is not set up (AZURE_VISION_KEY)");
+        }
+        byte[] data = blobs.get((String) rows.get(0).get("media_blob"));
+        if (data == null) throw ApiException.notFound("Stored file");
+        String text;
+        try {
+            text = "VOICE".equals(kind) ? reader.transcribe(data) : reader.readImage(data);
+        } catch (Exception e) {
+            db.sql("UPDATE messages SET media_status = 'FAILED' WHERE id = :m").param("m", messageId).update();
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "AI_FAILED", "The reading service did not respond. Try again.");
+        }
+        db.sql("UPDATE messages SET body = :b, media_text = :mt, media_status = :s WHERE id = :m")
+                .param("b", InboxService.mediaBody(kind, text, null)).param("mt", text).param("s", text == null ? "FAILED" : "DONE")
+                .param("m", messageId).update();
+        return Map.of("text", text == null ? "" : text, "ok", text != null);
     }
 
     @GetMapping
@@ -35,19 +65,20 @@ public class InboxController {
     public Map<String, Object> get(@AuthenticationPrincipal AuthUser u, @PathVariable long id) { return inbox.get(u, id); }
 
     @GetMapping("/{id}/draft")
-    public Map<String, Object> draft(@AuthenticationPrincipal AuthUser u, @PathVariable long id) {
-        return inbox.draft(u, id, null);
+    public Map<String, Object> draft(@AuthenticationPrincipal AuthUser u, @PathVariable long id,
+                                     @RequestParam(required = false) Long godownId) {
+        return inbox.draft(u, id, null, godownId);
     }
 
     public record Line(@NotNull Long productId, @NotNull @Min(1) @Max(100000) Integer qty) {}
-    public record Confirm(@NotEmpty @Size(max = 100) List<@Valid Line> lines, boolean overrideCredit) {}
+    public record Confirm(@NotEmpty @Size(max = 100) List<@Valid Line> lines, boolean overrideCredit, Long godownId) {}
 
     @PostMapping("/{id}/confirm")
     public OrderService.CreatedOrder confirm(@AuthenticationPrincipal AuthUser u, @PathVariable long id,
                                              @Valid @RequestBody Confirm in) {
         return orders.confirmFromConversation(u, id,
                 in.lines().stream().map(l -> new OrderService.LineRequest(l.productId(), l.qty())).toList(),
-                in.overrideCredit());
+                in.overrideCredit(), in.godownId());
     }
 
     @PostMapping("/{id}/ignore")

@@ -81,8 +81,15 @@ public abstract class IntegrationTestBase {
                 .map(p -> id(p.get("id"))).findFirst().orElseThrow();
     }
 
+    /** Stock of an item in the default godown (where orders reserve from unless told otherwise). */
     protected Map<String, Object> product(String sku) {
-        return getList(owner, "/api/inventory").getBody().stream().filter(p -> sku.equals(p.get("sku"))).findFirst().orElseThrow();
+        return product(owner, sku);
+    }
+
+    protected Map<String, Object> product(String token, String sku) {
+        long g = getList(token, "/api/godowns").getBody().stream().filter(x -> Boolean.TRUE.equals(x.get("isDefault")))
+                .map(x -> id(x.get("id"))).findFirst().orElseThrow();
+        return getList(token, "/api/inventory?godownId=" + g).getBody().stream().filter(p -> sku.equals(p.get("sku"))).findFirst().orElseThrow();
     }
 
     protected long conversationFor(String phone) {

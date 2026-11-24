@@ -64,6 +64,55 @@ public class FieldController {
         return st.query().listOfRows();
     }
 
+    public record Ping(@NotNull @DecimalMin("-90") @DecimalMax("90") Double lat,
+                       @NotNull @DecimalMin("-180") @DecimalMax("180") Double lng,
+                       @PositiveOrZero @DecimalMax("100000") Double accuracy) {}
+
+    /** Live location from the field app. Pings closer than 30 seconds apart are dropped to protect the database. */
+    @PostMapping("/location")
+    @PreAuthorize("hasAnyRole('SALES','DELIVERY')")
+    public Map<String, Object> ping(@AuthenticationPrincipal AuthUser u, @Valid @RequestBody Ping in) {
+        int n = db.sql("""
+                INSERT INTO location_pings (tenant_id, user_id, lat, lng, accuracy_m)
+                SELECT :t, :u, :la, :ln, :acc
+                WHERE NOT EXISTS (SELECT 1 FROM location_pings WHERE tenant_id = :t AND user_id = :u
+                                  AND recorded_at > now() - interval '30 seconds')
+                """).param("t", u.tenantId()).param("u", u.userId()).param("la", in.lat()).param("ln", in.lng())
+                .param("acc", in.accuracy()).update();
+        return Map.of("stored", n > 0);
+    }
+
+    /** Last known position of everyone sharing location in the past 12 hours. */
+    @GetMapping("/live")
+    @PreAuthorize("hasAnyRole('OWNER','ACCOUNTANT')")
+    public List<Map<String, Object>> live(@AuthenticationPrincipal AuthUser u) {
+        return db.sql("""
+                SELECT DISTINCT ON (lp.user_id) lp.user_id AS "userId", us.name, us.role, lp.lat, lp.lng, lp.accuracy_m AS accuracy,
+                       lp.recorded_at AS "recordedAt", extract(epoch FROM now() - lp.recorded_at)::int AS "ageSeconds",
+                       (SELECT count(*) FROM location_pings x WHERE x.user_id = lp.user_id AND x.recorded_at >= date_trunc('day', now())) AS "pointsToday"
+                FROM location_pings lp JOIN users us ON us.id = lp.user_id
+                WHERE lp.tenant_id = :t AND lp.recorded_at > now() - interval '12 hours'
+                ORDER BY lp.user_id, lp.recorded_at DESC
+                """).param("t", u.tenantId()).query().listOfRows();
+    }
+
+    /** Today's trail for one person, oldest first, thinned to at most 500 points. */
+    @GetMapping("/trail/{userId}")
+    @PreAuthorize("hasAnyRole('OWNER','ACCOUNTANT')")
+    public List<Map<String, Object>> trail(@AuthenticationPrincipal AuthUser u, @PathVariable long userId) {
+        return db.sql("""
+                SELECT lat, lng, recorded_at AS "recordedAt" FROM (
+                  SELECT lat, lng, recorded_at, row_number() OVER (ORDER BY recorded_at) rn, count(*) OVER () total
+                  FROM location_pings WHERE tenant_id = :t AND user_id = :u AND recorded_at >= date_trunc('day', now())) x
+                WHERE total <= 500 OR rn % CEIL(total / 500.0)::int = 0 ORDER BY recorded_at
+                """).param("t", u.tenantId()).param("u", userId).query().listOfRows();
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(cron = "0 15 3 * * *")
+    public void purgeOldPings() {
+        db.sql("DELETE FROM location_pings WHERE recorded_at < now() - interval '30 days'").update();
+    }
+
     public record CheckIn(Long customerId, @DecimalMin("-90") @DecimalMax("90") Double lat,
                           @DecimalMin("-180") @DecimalMax("180") Double lng, @Size(max = 500) String note) {}
 

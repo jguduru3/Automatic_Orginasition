@@ -60,6 +60,10 @@ app:
     # Template body params: {{1}} customer name, {{2}} amount due, {{3}} oldest bill
     reminder-template: ${WHATSAPP_REMINDER_TEMPLATE:}
     template-language: ${WHATSAPP_TEMPLATE_LANGUAGE:en}
+    # driver alert params: {{1}} driver, {{2}} order no, {{3}} customer, {{4}} town
+    dispatch-template: ${WHATSAPP_DISPATCH_TEMPLATE:}
+    # purchase order params: {{1}} supplier, {{2}} PO no, {{3}} total, {{4}} expected date
+    po-template: ${WHATSAPP_PO_TEMPLATE:}
   tally:
     mode: ${TALLY_MODE:mock}                   # mock | http
     url: ${TALLY_URL:http://localhost:9000}
@@ -69,6 +73,10 @@ app:
     sgst-ledger: ${TALLY_SGST_LEDGER:SGST 9%}
     bank-ledger: ${TALLY_BANK_LEDGER:HDFC Bank}
     auto-sync: ${TALLY_AUTO_SYNC:false}
+    purchase-ledger: ${TALLY_PURCHASE_LEDGER:Purchase @18% GST (Local)}
+    input-cgst-ledger: ${TALLY_INPUT_CGST_LEDGER:Input CGST 9%}
+    input-sgst-ledger: ${TALLY_INPUT_SGST_LEDGER:Input SGST 9%}
+    debtors-group: ${TALLY_DEBTORS_GROUP:Sundry Debtors}
     max-attempts: 5
   blob:
     mode: ${BLOB_MODE:local}                   # local | azure
@@ -76,5 +84,12 @@ app:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING:}
     account-url: ${AZURE_STORAGE_ACCOUNT_URL:}
     container: ${AZURE_STORAGE_CONTAINER:distributoros}
+  ai:
+    speech-key: ${AZURE_SPEECH_KEY:}
+    speech-region: ${AZURE_SPEECH_REGION:centralindia}
+    speech-language: ${AZURE_SPEECH_LANGUAGE:hi-IN}
+    vision-endpoint: ${AZURE_VISION_ENDPOINT:}
+    vision-key: ${AZURE_VISION_KEY:}
   simulate-enabled: ${SIMULATE_ENABLED:true}
+  signup-enabled: ${SIGNUP_ENABLED:false}
   login-rate-limit-per5min: ${LOGIN_RATE_LIMIT:10}

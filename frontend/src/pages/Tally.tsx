@@ -1,13 +1,15 @@
+import { useState } from "react";
 import { api, post } from "../api";
 import { Kpi, Loading, PageTop, Pill, useAction, useApi } from "../components/ui";
 import { inr, time } from "../format";
 
 interface V { id: number; type: string; ref: string; party: string; amount: number; attempts?: number; lastError?: string; voucherNo?: string; postedAt?: string }
-interface Status { mode: string; company?: string; autoSync: boolean; mapping: Record<string, string>; queue: V[]; failed: V[]; log: V[]; postedToday: number }
+interface Status { mode: string; company?: string; autoSync: boolean; lastPullAt?: string; lastPullSummary?: string; mapping: Record<string, string>; queue: V[]; failed: V[]; log: V[]; postedToday: number }
 
 export default function Tally() {
   const s = useApi(sig => api<Status>("/api/tally", { signal: sig }));
   const { busy, run } = useAction();
+  const [applyStock, setApplyStock] = useState(false);
   if (!s.data) return <Loading error={s.error} onRetry={s.reload} />;
   const d = s.data;
   const sync = () => run(() => post<{ posted: number; failed: number }>("/api/tally/sync"),
@@ -36,6 +38,14 @@ export default function Tally() {
           <thead><tr><th>Time</th><th>Ref</th><th>Tally voucher</th></tr></thead>
           <tbody>{d.log.map(v => <tr key={v.id}><td className="num">{time(v.postedAt)}</td><td className="num">{v.ref}<span className="sub">{v.party}</span></td><td className="num">{v.voucherNo} <Pill tone="good">Posted</Pill></td></tr>)}</tbody>
         </table></div>}</div>
+      </div>
+      <div className="card"><div className="card-h"><h2>Pull from Tally</h2><span className="hint">{d.lastPullAt ? `Last pulled ${new Date(d.lastPullAt).toLocaleString("en-IN")}` : "Never pulled"}</span></div>
+        <p style={{ margin: "0 0 10px", color: "var(--ink-2)", fontSize: 13 }}>Brings in stock items and Sundry Debtors ledgers. New customers start with a zero credit limit, so their orders wait for approval until you set one.</p>
+        {d.lastPullSummary && <p className="sub" style={{ margin: "0 0 10px" }}>{d.lastPullSummary}</p>}
+        <div className="row-actions">
+          <label style={{ display: "flex", gap: 8, fontSize: 13 }}><input type="checkbox" checked={applyStock} onChange={e => setApplyStock(e.target.checked)} /> Also set stock to Tally's closing balance (main godown)</label>
+          <button className="btn" disabled={busy} onClick={() => run(() => post<{ summary: string }>("/api/tally/pull", { applyStock }), r => `Pulled: ${r.summary}`).then(s.reload).catch(() => {})}>Pull items and customers</button>
+        </div>
       </div>
       <div className="card"><div className="card-h"><h2>Ledger mapping</h2><span className="hint">Set through environment variables</span></div>
         <dl className="kv"><dt>Sales ledger</dt><dd>{d.mapping.salesLedger}</dd><dt>Tax ledgers</dt><dd>{d.mapping.cgstLedger}, {d.mapping.sgstLedger}</dd><dt>Receipts to</dt><dd>{d.mapping.bankLedger}</dd></dl></div>

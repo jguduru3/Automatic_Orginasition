@@ -1,6 +1,7 @@
 package com.distributoros.inbox;
 
 import com.distributoros.config.AppProperties;
+import com.distributoros.integrations.MediaReader;
 import com.distributoros.integrations.WhatsAppClient;
 import com.distributoros.storage.BlobStorage;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -31,10 +32,11 @@ public class WhatsAppWebhookController {
     private final ObjectMapper json;
     private final WhatsAppClient wa;
     private final BlobStorage blobs;
+    private final MediaReader reader;
 
     public WhatsAppWebhookController(AppProperties props, InboxService inbox, JdbcClient db, ObjectMapper json,
-                                     WhatsAppClient wa, BlobStorage blobs) {
-        this.props = props; this.inbox = inbox; this.db = db; this.json = json; this.wa = wa; this.blobs = blobs;
+                                     WhatsAppClient wa, BlobStorage blobs, MediaReader reader) {
+        this.props = props; this.inbox = inbox; this.db = db; this.json = json; this.wa = wa; this.blobs = blobs; this.reader = reader;
     }
 
     @GetMapping
@@ -84,33 +86,50 @@ public class WhatsAppWebhookController {
         String text;
         String kind = "TEXT";
         String blob = null;
+        String mediaText = null;
         switch (type) {
             case "text" -> text = m.path("text").path("body").asText("");
             case "audio" -> {
                 kind = "VOICE";
-                text = "[Voice note received - open to listen]";
-                blob = saveMedia(tenantId, m.path("audio").path("id").asText(null), "ogg");
+                Saved s = saveMedia(tenantId, m.path("audio").path("id").asText(null), "ogg");
+                blob = s == null ? null : s.path();
+                mediaText = s == null ? null : safely(() -> reader.transcribe(s.data()));
+                text = InboxService.mediaBody("VOICE", mediaText, null);
             }
             case "image" -> {
                 kind = "IMAGE";
-                text = m.path("image").path("caption").asText("[Photo of order list]");
-                blob = saveMedia(tenantId, m.path("image").path("id").asText(null), "jpg");
+                String caption = m.path("image").path("caption").asText("");
+                Saved s = saveMedia(tenantId, m.path("image").path("id").asText(null), "jpg");
+                blob = s == null ? null : s.path();
+                mediaText = s == null ? null : safely(() -> reader.readImage(s.data()));
+                text = InboxService.mediaBody("IMAGE", mediaText, caption);
             }
             default -> { return; }
         }
-        inbox.receive(tenantId, new InboxService.Inbound(id, from, text, kind, blob));
+        inbox.receive(tenantId, new InboxService.Inbound(id, from, text, kind, blob, mediaText));
     }
 
-    private String saveMedia(long tenantId, String mediaId, String ext) {
+    record Saved(String path, byte[] data) {}
+
+    private Saved saveMedia(long tenantId, String mediaId, String ext) {
         if (mediaId == null) return null;
         try {
             byte[] data = wa.downloadMedia(mediaId);
             if (data == null) return null;
             String path = "tenants/" + tenantId + "/media/" + UUID.randomUUID() + "." + ext;
             blobs.put(path, data, "ogg".equals(ext) ? "audio/ogg" : "image/jpeg");
-            return path;
+            return new Saved(path, data);
         } catch (Exception e) {
             log.warn("Could not store media {}", mediaId, e);
+            return null;
+        }
+    }
+
+    private static String safely(java.util.function.Supplier<String> f) {
+        try {
+            return f.get();
+        } catch (Exception e) {
+            log.warn("Media reading failed: {}", e.getMessage());
             return null;
         }
     }

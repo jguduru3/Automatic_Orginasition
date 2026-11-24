@@ -19,12 +19,28 @@ public class InboxService {
     private final PricingService pricing;
     private final CreditService credit;
     private final Activity activity;
+    private final com.distributoros.catalog.StockService stock;
 
-    public InboxService(JdbcClient db, PricingService pricing, CreditService credit, Activity activity) {
-        this.db = db; this.pricing = pricing; this.credit = credit; this.activity = activity;
+    public InboxService(JdbcClient db, PricingService pricing, CreditService credit, Activity activity,
+                        com.distributoros.catalog.StockService stock) {
+        this.db = db; this.pricing = pricing; this.credit = credit; this.activity = activity; this.stock = stock;
     }
 
-    public record Inbound(String waMessageId, String fromPhone, String body, String kind, String mediaBlob) {}
+    public record Inbound(String waMessageId, String fromPhone, String body, String kind, String mediaBlob, String mediaText) {
+        public Inbound(String waMessageId, String fromPhone, String body, String kind, String mediaBlob) {
+            this(waMessageId, fromPhone, body, kind, mediaBlob, null);
+        }
+    }
+
+    /** Message text for a voice note or photo: the machine-read text when available, else a prompt to open it. */
+    public static String mediaBody(String kind, String mediaText, String caption) {
+        String label = "VOICE".equals(kind) ? "[Voice note]" : "[Photo]";
+        StringBuilder b = new StringBuilder(label);
+        if (caption != null && !caption.isBlank()) b.append(' ').append(caption.trim());
+        if (mediaText != null && !mediaText.isBlank()) b.append('\n').append(mediaText.trim());
+        else b.append("VOICE".equals(kind) ? " received - open to listen" : " received - open to view");
+        return b.toString();
+    }
 
     /** Stores an inbound message idempotently (WhatsApp retries webhooks) and reopens the conversation. */
     @Transactional
@@ -43,11 +59,12 @@ public class InboxService {
                 RETURNING id
                 """).param("t", tenantId).param("c", customerId).param("p", phone).query(Long.class).single();
         int inserted = db.sql("""
-                INSERT INTO messages (tenant_id, conversation_id, direction, body, kind, media_blob, wa_message_id)
-                VALUES (:t, :c, 'IN', :b, :k, :mb, :w)
+                INSERT INTO messages (tenant_id, conversation_id, direction, body, kind, media_blob, wa_message_id, media_text, media_status)
+                VALUES (:t, :c, 'IN', :b, :k, :mb, :w, :mt, :ms)
                 ON CONFLICT (tenant_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
                 """).param("t", tenantId).param("c", convId).param("b", body).param("k", m.kind())
-                .param("mb", m.mediaBlob()).param("w", m.waMessageId()).update();
+                .param("mb", m.mediaBlob()).param("w", m.waMessageId()).param("mt", m.mediaText())
+                .param("ms", m.mediaBlob() == null ? null : (m.mediaText() != null ? "DONE" : "SKIPPED")).update();
         if (inserted == 0) return false; // duplicate delivery
         int reopened = db.sql("""
                 UPDATE conversations SET status = 'NEW', order_id = NULL WHERE id = :c AND status <> 'NEW'
@@ -89,7 +106,7 @@ public class InboxService {
         if (rows.isEmpty()) throw ApiException.notFound("Conversation");
         Map<String, Object> out = new LinkedHashMap<>(rows.get(0));
         out.put("messages", db.sql("""
-                SELECT id, direction, body, kind, media_blob AS "mediaPath", created_at AS "createdAt"
+                SELECT id, direction, body, kind, media_blob AS "mediaPath", media_status AS "mediaStatus", created_at AS "createdAt"
                 FROM messages WHERE conversation_id = :c ORDER BY id DESC LIMIT 200
                 """).param("c", id).query().listOfRows().reversed());
         return out;
@@ -114,7 +131,7 @@ public class InboxService {
     }
 
     /** Builds an editable draft: parsed lines priced for this customer, stock availability and credit position. */
-    public Map<String, Object> draft(AuthUser u, long conversationId, String overrideText) {
+    public Map<String, Object> draft(AuthUser u, long conversationId, String overrideText, Long godownIdOrNull) {
         Map<String, Object> conv = get(u, conversationId);
         String text = overrideText;
         if (text == null) {
@@ -140,7 +157,9 @@ public class InboxService {
         }
         Set<Long> ids = new HashSet<>();
         parsed.forEach(p -> { if (p.productId() != null) ids.add(p.productId()); });
-        Map<Long, PricingService.Quote> quotes = pricing.quote(u.tenantId(), customerId, ids);
+        long godownId = stock.godown(u.tenantId(), godownIdOrNull);
+        out.put("godownId", godownId);
+        Map<Long, PricingService.Quote> quotes = pricing.quote(u.tenantId(), customerId, godownId, ids);
         List<Map<String, Object>> lines = new ArrayList<>();
         for (OrderParser.ParsedLine p : parsed) {
             Map<String, Object> l = new LinkedHashMap<>();
@@ -155,6 +174,7 @@ public class InboxService {
                 l.put("gstRate", q.gstRate());
                 l.put("priceSource", q.source());
                 l.put("free", q.free());
+                l.put("requiresLicence", q.requiresLicence());
             }
             lines.add(l);
         }
@@ -166,6 +186,11 @@ public class InboxService {
         cr.put("openOrders", c.openOrders());
         cr.put("oldestDays", c.oldestDays());
         out.put("credit", cr);
+        var lic = db.sql("SELECT drug_licence_no, drug_licence_expiry FROM customers WHERE id = :c").param("c", customerId).query().listOfRows().get(0);
+        Map<String, Object> licence = new LinkedHashMap<>();
+        licence.put("number", lic.get("drug_licence_no"));
+        licence.put("expiry", lic.get("drug_licence_expiry"));
+        out.put("licence", licence);
         return out;
     }
 

@@ -208,3 +208,6 @@ td .sub{display:block;color:var(--muted);font-size:12px}
 .draft td:first-child{min-width:150px}
 a.btn{text-decoration:none;color:inherit;display:inline-flex;align-items:center}
 a.btn.pri{color:var(--accent-ink)}
+.top>*{min-width:0;max-width:100%}
+.row-actions select,.row-actions input{max-width:100%}
+@media (max-width:820px){.top .row-actions{width:100%}}

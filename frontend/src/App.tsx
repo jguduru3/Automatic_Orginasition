@@ -11,6 +11,7 @@ import Collections from "./pages/Collections";
 import Field from "./pages/Field";
 import Tally from "./pages/Tally";
 import Team from "./pages/Team";
+import Purchases from "./pages/Purchases";
 
 const UserCtx = createContext<User | null>(null);
 export const useUser = () => useContext(UserCtx)!;
@@ -23,6 +24,7 @@ const NAV: NavItem[] = [
   { path: "/inbox", label: "WhatsApp orders", roles: ["OWNER", "ACCOUNTANT", "SALES"], el: <Inbox /> },
   { path: "/orders", label: "Sales orders", roles: ALL, el: <Orders /> },
   { path: "/inventory", label: "Inventory", roles: ["OWNER", "ACCOUNTANT", "SALES"], el: <Inventory /> },
+  { path: "/purchases", label: "Purchases", roles: ["OWNER", "ACCOUNTANT"], el: <Purchases /> },
   { path: "/customers", label: "Customers & credit", roles: ["OWNER", "ACCOUNTANT", "SALES"], el: <Customers /> },
   { path: "/collections", label: "Collections", roles: ["OWNER", "ACCOUNTANT", "SALES"], el: <Collections /> },
   { path: "/field", label: "Field & delivery", roles: ALL, el: <Field /> },

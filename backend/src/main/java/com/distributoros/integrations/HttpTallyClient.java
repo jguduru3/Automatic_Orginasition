@@ -27,6 +27,13 @@ public class HttpTallyClient implements TallyClient {
     }
 
     @Override
+    public String export(String xmlRequest) {
+        String resp = http.post().contentType(MediaType.TEXT_XML).body(xmlRequest).retrieve().body(String.class);
+        if (resp == null || resp.isBlank()) throw new IllegalStateException("Empty response from Tally");
+        return resp;
+    }
+
+    @Override
     public String post(String xmlEnvelope, String fallbackNumber) {
         String resp = http.post().contentType(MediaType.TEXT_XML).body(xmlEnvelope).retrieve().body(String.class);
         if (resp == null) throw new IllegalStateException("Empty response from Tally");

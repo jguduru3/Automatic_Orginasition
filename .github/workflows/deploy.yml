@@ -13,6 +13,8 @@ on:
       loadDemoData: { description: Load demo tenant, type: boolean, default: false }
       whatsappMode: { description: WhatsApp mode, type: choice, options: [mock, cloud], default: mock }
       tallyMode: { description: Tally mode, type: choice, options: [mock, http], default: mock }
+      signupEnabled: { description: Allow new businesses to sign up, type: boolean, default: false }
+      enableAi: { description: Voice-note and photo reading (Azure AI), type: boolean, default: true }
 
 permissions:
   id-token: write
@@ -49,7 +51,7 @@ jobs:
         id: platform
         run: |
           out=$(az deployment group create -g "$RG" -f infra/main.bicep \
-            -p prefix="$PREFIX" deployApps=false \
+            -p prefix="$PREFIX" deployApps=false enableAi=${{ inputs.enableAi != false }} \
                postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" jwtSecret="$JWT_SECRET" \
             --query properties.outputs -o json)
           echo "acr=$(echo "$out" | jq -r .acrName.value)" >> "$GITHUB_OUTPUT"
@@ -72,6 +74,9 @@ jobs:
                whatsappVerifyToken="$WHATSAPP_VERIFY_TOKEN" \
                whatsappMode='${{ inputs.whatsappMode || 'mock' }}' tallyMode='${{ inputs.tallyMode || 'mock' }}' \
                loadDemoData=${{ inputs.loadDemoData || false }} \
+               signupEnabled=${{ inputs.signupEnabled || false }} enableAi=${{ inputs.enableAi != false }} \
+               whatsappReminderTemplate="${{ vars.WHATSAPP_REMINDER_TEMPLATE }}" whatsappDispatchTemplate="${{ vars.WHATSAPP_DISPATCH_TEMPLATE }}" \
+               whatsappPoTemplate="${{ vars.WHATSAPP_PO_TEMPLATE }}" \
             --query properties.outputs -o json)
           url=$(echo "$out" | jq -r .webUrl.value)
           echo "url=$url" >> "$GITHUB_OUTPUT"

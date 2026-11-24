@@ -49,9 +49,25 @@ public class DashboardController {
                   (SELECT count(*) FROM tally_outbox WHERE tenant_id = :t AND status = 'PENDING') AS "tallyPending"
                 """, t));
         d.put("lowStock", many("""
-                SELECT p.sku, p.name, s.on_hand - s.reserved AS free, p.reorder_level AS "reorderLevel"
-                FROM products p JOIN stock s ON s.product_id = p.id
-                WHERE p.tenant_id = :t AND p.active AND s.on_hand - s.reserved < p.reorder_level ORDER BY p.sku
+                SELECT sku, name, free, "reorderLevel" FROM (
+                  SELECT p.sku, p.name, p.reorder_level AS "reorderLevel",
+                    CASE WHEN p.batch_tracked THEN COALESCE((SELECT sum(b.on_hand - b.reserved) FROM stock_batches b
+                           WHERE b.product_id = p.id AND b.expiry_date > CURRENT_DATE), 0)
+                         ELSE COALESCE((SELECT sum(s.on_hand - s.reserved) FROM stock s WHERE s.product_id = p.id), 0) END AS free
+                  FROM products p WHERE p.tenant_id = :t AND p.active) x
+                WHERE free < "reorderLevel" ORDER BY sku
+                """, t));
+        d.put("expiry", one("""
+                SELECT COALESCE(sum(CASE WHEN b.expiry_date <= CURRENT_DATE THEN b.on_hand * p.list_rate END), 0) AS "expiredValue",
+                       COALESCE(sum(CASE WHEN b.expiry_date > CURRENT_DATE AND b.expiry_date <= CURRENT_DATE + 90 THEN b.on_hand * p.list_rate END), 0) AS "expiring90Value",
+                       count(*) FILTER (WHERE b.expiry_date <= CURRENT_DATE + 90) AS batches
+                FROM stock_batches b JOIN products p ON p.id = b.product_id WHERE b.tenant_id = :t AND b.on_hand > 0
+                """, t));
+        d.put("purchases", one("""
+                SELECT count(*) FILTER (WHERE status IN ('SENT','PARTIAL')) AS open,
+                       COALESCE(sum(total) FILTER (WHERE status IN ('SENT','PARTIAL')), 0) AS "openValue",
+                       count(*) FILTER (WHERE status IN ('SENT','PARTIAL') AND expected_date < CURRENT_DATE) AS late
+                FROM purchase_orders WHERE tenant_id = :t
                 """, t));
         d.put("dailySales", many("""
                 SELECT to_char(d, 'YYYY-MM-DD') AS day, COALESCE(sum(o.total), 0) AS value

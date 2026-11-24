@@ -37,7 +37,9 @@ jobs:
       - name: Apply migrations and demo seed
         run: for f in backend/src/main/resources/db/migration/*.sql backend/src/main/resources/db/demo/*.sql; do psql -v ON_ERROR_STOP=1 -q -f "$f"; done
       - name: PREPARE every SQL statement in the Java code
-        run: python3 tools/check_sql.py backend/src/main/java "postgresql://postgres:postgres@localhost/dos"
+        run: |
+          python3 tools/check_sql.py backend/src/main/java "postgresql://postgres:postgres@localhost/dos"
+          python3 tools/check_dynamic_sql.py backend/src/main/java "postgresql://postgres:postgres@localhost/dos"
       - name: Concurrency stress on stock, numbering and payments (pgbench)
         run: bash load-tests/pgbench/run.sh
 

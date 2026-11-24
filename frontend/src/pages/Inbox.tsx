@@ -8,9 +8,9 @@ import { can, useUser } from "../App";
 
 interface Conv { id: number; phone: string; status: string; customer?: string; town?: string; preview?: string; kind?: string;
   lastMessageAt: string; orderNumber?: number }
-interface Msg { id: number; direction: "IN" | "OUT"; body: string; kind: string; createdAt: string; mediaPath?: string }
+interface Msg { id: number; direction: "IN" | "OUT"; body: string; kind: string; createdAt: string; mediaPath?: string; mediaStatus?: string }
 interface Thread extends Conv { customerId?: number; tier?: string; orderId?: number; orderStatus?: string; orderTotal?: number; messages: Msg[] }
-interface Draft { lines: DraftLine[]; credit?: DraftCredit; unknownCustomer?: boolean }
+interface Draft { lines: DraftLine[]; credit?: DraftCredit; unknownCustomer?: boolean; godownId?: number; licence?: { number?: string; expiry?: string } }
 interface Product { id: number; sku: string; name: string }
 
 export default function Inbox() {
@@ -77,7 +77,10 @@ function Conversation({ id, onChanged }: { id: number; onChanged: () => void }) 
           {th.messages.map(m => (
             <div key={m.id} className={`msg ${m.direction === "IN" ? "in" : "out"} ${m.kind === "VOICE" ? "voice" : ""}`}>
               {m.body}
-              {m.mediaPath && <div><FileButton path={m.mediaPath} label={m.kind === "VOICE" ? "Play voice note" : "View photo"} kind={m.kind === "VOICE" ? "audio" : "image"} /></div>}
+              {m.mediaPath && <div className="row-actions"><FileButton path={m.mediaPath} label={m.kind === "VOICE" ? "Play voice note" : "View photo"} kind={m.kind === "VOICE" ? "audio" : "image"} />
+                {m.direction === "IN" && m.mediaStatus !== "DONE" && <button type="button" className="btn ghost sm" disabled={busy}
+                  onClick={() => run(() => post<{ ok: boolean }>(`/api/inbox/messages/${m.id}/read`), r => r.ok ? "Read into text. Check the draft." : "Nothing readable found").then(refresh).catch(() => {})}>
+                  {m.kind === "VOICE" ? "Transcribe" : "Read text"}</button>}</div>}
               <time>{time(m.createdAt)}{m.direction === "OUT" ? " ✓✓" : ""}</time>
             </div>
           ))}
@@ -121,7 +124,9 @@ function UnknownCustomer({ thread, onDone }: { thread: Thread; onDone: () => voi
 function DraftPanel({ thread, onDone }: { thread: Thread; onDone: () => void }) {
   const user = useUser();
   const toast = useToast();
-  const d = useApi(s => api<Draft>(`/api/inbox/${thread.id}/draft`, { signal: s }), [thread.id, thread.messages.length]);
+  const godowns = useApi(s => api<{ id: number; name: string; isDefault: boolean }[]>("/api/godowns", { signal: s }));
+  const [godownId, setGodownId] = useState<number | "">("");
+  const d = useApi(s => api<Draft>(`/api/inbox/${thread.id}/draft${godownId ? `?godownId=${godownId}` : ""}`, { signal: s }), [thread.id, thread.messages.length, godownId]);
   const products = useApi(s => api<Product[]>("/api/inventory", { signal: s }));
   const [lines, setLines] = useState<DraftLine[] | null>(null);
   const [override, setOverride] = useState(false);
@@ -143,20 +148,31 @@ function DraftPanel({ thread, onDone }: { thread: Thread; onDone: () => void }) 
   };
 
   async function confirm() {
-    const body = { overrideCredit: override, lines: lines!.filter(l => l.productId && l.qty > 0).map(l => ({ productId: l.productId, qty: l.qty })) };
+    const body = { overrideCredit: override, godownId: godownId || undefined, lines: lines!.filter(l => l.productId && l.qty > 0).map(l => ({ productId: l.productId, qty: l.qty })) };
     try {
       await run(() => post<{ number: number; backorders: string[] }>(`/api/inbox/${thread.id}/confirm`, body),
         r => `SO-${r.number} confirmed. Stock reserved, reply sent on WhatsApp.` + (r.backorders.length ? ` Back-order: ${r.backorders.length} line(s).` : ""));
       onDone();
     } catch (e) {
-      if (e instanceof ApiError && (e.code === "ALREADY_HANDLED" || e.code === "CREDIT_HOLD")) { d.reload(); onDone(); }
+      if (e instanceof ApiError && (e.code === "ALREADY_HANDLED" || e.code === "CREDIT_HOLD" || e.code === "LICENCE_INVALID")) { d.reload(); onDone(); }
     }
   }
 
   const manualPick = lines.some(l => l.productId && l.rate === undefined);
+  const needsLicence = lines.some(l => (l as DraftLine & { requiresLicence?: boolean }).requiresLicence);
+  const lic = d.data.licence;
+  const licenceProblem = !needsLicence ? null
+    : !lic?.number ? "Prescription items need the customer's drug licence on file. Add it under Customers → Details."
+    : lic.expiry && new Date(lic.expiry) < new Date(new Date().toDateString()) ? `Drug licence ${lic.number} expired on ${new Date(lic.expiry).toLocaleDateString("en-IN")}. Prescription items can't be sold until it is renewed.`
+    : null;
   return (
     <div className="card">
-      <div className="card-h"><h2>Draft sales order</h2><span className="hint">{lines.length} lines read from the chat</span></div>
+      <div className="card-h"><h2>Draft sales order</h2>
+        {(godowns.data?.length ?? 0) > 1 ? <><label className="sr" htmlFor="dr-g">Ship from</label>
+          <select id="dr-g" value={godownId || d.data.godownId || ""} onChange={e => setGodownId(Number(e.target.value))} style={{ padding: 4, border: "1px solid var(--line)", borderRadius: 6, background: "var(--surface-2)", fontSize: 12 }}>
+            {godowns.data!.map(g => <option key={g.id} value={g.id}>Ship from {g.name}</option>)}</select></>
+          : <span className="hint">{lines.length} lines read from the chat</span>}</div>
+      {licenceProblem && <div className="banner" role="alert" style={{ marginBottom: 10 }}>{licenceProblem}</div>}
       <div className="tbl-wrap"><table className="draft">
         <thead><tr><th>Item</th><th className="r">Qty</th><th className="r">Rate</th><th>Stock</th><th className="r">Amount</th><th /></tr></thead>
         <tbody>
@@ -203,7 +219,7 @@ function DraftPanel({ thread, onDone }: { thread: Thread; onDone: () => void }) 
       {totals.short > 0 && <p style={{ fontSize: 12, color: "var(--ink-2)", margin: "10px 0 0" }}>{totals.short} line(s) short on stock. Confirming reserves what is free; the rest goes on back-order.</p>}
       {manualPick && <p style={{ fontSize: 12, color: "var(--ink-2)", margin: "10px 0 0" }}>Manually picked items are priced and stock-checked when you confirm.</p>}
       <div className="actions">
-        <button className="btn pri" onClick={confirm} disabled={busy || hold || totals.unmatched > 0 || !lines.some(l => l.productId && l.qty > 0)}>
+        <button className="btn pri" onClick={confirm} disabled={busy || hold || !!licenceProblem || totals.unmatched > 0 || !lines.some(l => l.productId && l.qty > 0)}>
           {busy ? "Confirming…" : "Confirm & reply on WhatsApp"}</button>
         {totals.status === "HOLD" && !override && can(user, "OWNER") && <button className="btn" onClick={() => setOverride(true)}>Approve override</button>}
         {totals.status === "HOLD" && thread.customerId && <button className="btn" disabled={busy}

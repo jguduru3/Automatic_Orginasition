@@ -35,7 +35,7 @@ public class OutboundMessageSender {
             String waId = m.template() != null
                     ? client.sendTemplate(phoneId, m.toPhone(), m.template(), lang, m.templateParams())
                     : client.sendText(phoneId, m.toPhone(), m.body());
-            if (waId != null) {
+            if (waId != null && m.messageId() > 0) {
                 db.sql("UPDATE messages SET wa_message_id = :w WHERE id = :id")
                         .param("w", waId).param("id", m.messageId()).update();
             }

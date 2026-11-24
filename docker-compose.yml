@@ -38,6 +38,7 @@ services:
       WHATSAPP_VERIFY_TOKEN: local-verify
       TALLY_MODE: mock
       SIMULATE_ENABLED: "true"
+      SIGNUP_ENABLED: "true"
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-10}
     ports: ["8081:8080"]
     healthcheck:

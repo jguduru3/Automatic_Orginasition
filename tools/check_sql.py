@@ -8,6 +8,9 @@ for f in pathlib.Path(src).rglob("*.java"):
     code = f.read_text()
     # text blocks passed to .sql( or assigned to *_SQL constants
     for m in re.finditer(r'(?:\.sql\(|_SQL\s*=)\s*"""\n(.*?)"""', code, re.S):
+        # pieces concatenated with "+" are fragments; tools/check_dynamic_sql.py assembles and checks those
+        if code[m.end():].lstrip().startswith("+") or m.group(1).lstrip().upper().startswith("CASE"):
+            continue
         stmts.append((f.name, m.group(1)))
     for m in re.finditer(r'\.sql\("((?:[^"\\]|\\.)*)"\)', code):
         stmts.append((f.name, m.group(1).replace('\\"', '"')))

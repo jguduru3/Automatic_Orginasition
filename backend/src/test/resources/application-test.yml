@@ -8,3 +8,4 @@ app:
     app-secret: test-secret
     verify-token: test-verify
   login-rate-limit-per5min: 1000
+  signup-enabled: true

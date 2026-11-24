@@ -3,6 +3,12 @@
 
 INSERT INTO tenants (name, gstin, wa_phone_number_id) VALUES ('Shree Datta Electricals', '27ABCDE1234F1Z5', 'demo-phone-id');
 
+INSERT INTO godowns (tenant_id, code, name, address, is_default)
+SELECT t.id, g.code, g.name, g.addr, g.def FROM tenants t,
+  (VALUES ('MAIN','Hadapsar godown','Plot 14, Hadapsar Industrial Estate, Pune',TRUE),
+          ('CHK','Chakan branch','Gat 220, Chakan MIDC',FALSE)) g(code,name,addr,def)
+WHERE t.name = 'Shree Datta Electricals';
+
 INSERT INTO users (tenant_id, email, password_hash, name, role, monthly_target, beat)
 SELECT t.id, u.email, '$2a$10$AvMnoxKfPR2jDjbJI9jDp..Wsy3x6jDRlstmEM0a9ILGvL1zKaiMO', u.name, u.role, u.target, u.beat
 FROM tenants t, (VALUES
@@ -37,10 +43,22 @@ SELECT t.id, p.sku, p.name, p.unit, p.cat, p.rate, p.reorder, p.pats FROM tenant
  ('CD20','PVC Conduit 20 mm (bundle of 10)','bundle','Accessories',420,60, ARRAY['conduit(\s*pipe)?(\s*20\s*mm)?','pvc\s*pipe\s*20'])
 ) AS p(sku,name,unit,cat,rate,reorder,pats);
 
-INSERT INTO stock (product_id, tenant_id, on_hand)
-SELECT p.id, p.tenant_id, s.qty FROM products p JOIN (VALUES
+INSERT INTO stock (product_id, tenant_id, godown_id, on_hand)
+SELECT p.id, p.tenant_id, (SELECT id FROM godowns g WHERE g.tenant_id = p.tenant_id AND g.is_default), s.qty FROM products p JOIN (VALUES
  ('W15',320),('W25',210),('W40',60),('M16',900),('M32',640),('M63',85),('RC40',22),('DB8',40),
  ('L9',480),('LP15',260),('F12',95),('FEX',14),('SW6',150),('SK16',70),('CD20',300)) s(sku,qty) ON s.sku = p.sku;
+
+-- branch stock
+INSERT INTO stock (product_id, tenant_id, godown_id, on_hand)
+SELECT p.id, p.tenant_id, (SELECT id FROM godowns g WHERE g.tenant_id = p.tenant_id AND g.code = 'CHK'), s.qty FROM products p JOIN (VALUES
+ ('W15',60),('M16',150),('RC40',10),('FEX',12),('L9',80)) s(sku,qty) ON s.sku = p.sku;
+
+INSERT INTO suppliers (tenant_id, name, phone, email, gstin, lead_days)
+SELECT t.id, s.name, s.phone, s.email, s.gstin, s.lead FROM tenants t, (VALUES
+ ('Volt Cables Pvt Ltd','919820011100','orders@voltcables.example','27AAACV1111A1Z1',4),
+ ('Sure Switchgear Distributors','919822022200','sales@sureswitch.example','27AAACS2222B1Z2',2),
+ ('Brightline Lighting','919823033300','po@brightline.example','27AAACB3333C1Z3',5)) s(name,phone,email,gstin,lead)
+WHERE t.name = 'Shree Datta Electricals';
 
 INSERT INTO customers (tenant_id, name, town, phone, tier_id, credit_limit, salesperson_id)
 SELECT t.id, c.name, c.town, c.phone, pt.id, c.lim, u.id
@@ -63,11 +81,12 @@ SELECT c.id, p.id, x.rate FROM customers c JOIN products p ON p.tenant_id = c.te
 JOIN (VALUES ('RC40',2450),('M63',660)) x(sku,rate) ON x.sku = p.sku
 WHERE c.phone = '919881066006';
 
-INSERT INTO vehicles (tenant_id, reg_no, type, driver_name, driver_user_id)
-SELECT t.id, v.reg, v.type, v.driver, (SELECT id FROM users WHERE email = v.email)
-FROM tenants t, (VALUES ('MH12 AB 4521','Tata Ace','Raju Pawar','raju@demo.in'),
-                        ('MH12 CD 8890','Bolero Pickup','Sameer Shaikh',NULL),
-                        ('MH14 EF 1102','Piaggio Ape','Imran Khan',NULL)) v(reg,type,driver,email);
+INSERT INTO vehicles (tenant_id, reg_no, type, driver_name, driver_user_id, driver_phone)
+SELECT t.id, v.reg, v.type, v.driver, (SELECT id FROM users WHERE email = v.email), v.phone
+FROM tenants t, (VALUES ('MH12 AB 4521','Tata Ace','Raju Pawar','raju@demo.in','919850044401'),
+                        ('MH12 CD 8890','Bolero Pickup','Sameer Shaikh',NULL,'919850044402'),
+                        ('MH14 EF 1102','Piaggio Ape','Imran Khan',NULL,'919850044403')) v(reg,type,driver,email,phone)
+WHERE t.name = 'Shree Datta Electricals';
 
 -- Opening invoices (historic, already synced to Tally)
 INSERT INTO invoices (tenant_id, number, customer_id, invoice_date, amount)
@@ -84,12 +103,14 @@ FROM customers c JOIN (VALUES
 ) i(phone,no,age,amt) ON i.phone = c.phone;
 
 INSERT INTO doc_counters (tenant_id, kind, next_value)
-SELECT t.id, k.kind, k.n FROM tenants t, (VALUES ('SO',1037),('INV',2305),('RCPT',801),('VCH',5121)) k(kind,n);
+SELECT t.id, k.kind, k.n FROM tenants t, (VALUES ('SO',1037),('INV',2305),('RCPT',801),('VCH',5121),('PO',301),('GRN',501),('TRF',11)) k(kind,n)
+WHERE t.name = 'Shree Datta Electricals';
 
 -- Open orders that hold stock
 WITH o AS (
-  INSERT INTO sales_orders (tenant_id, number, customer_id, source, status, salesperson_id, subtotal, tax, total, created_at)
-  SELECT c.tenant_id, x.no, c.id, x.src, x.st, c.salesperson_id, 0, 0, 0, now() - interval '2 hours'
+  INSERT INTO sales_orders (tenant_id, number, customer_id, source, status, salesperson_id, subtotal, tax, total, created_at, godown_id)
+  SELECT c.tenant_id, x.no, c.id, x.src, x.st, c.salesperson_id, 0, 0, 0, now() - interval '2 hours',
+         (SELECT id FROM godowns g WHERE g.tenant_id = c.tenant_id AND g.is_default)
   FROM customers c JOIN (VALUES
     (1034,'919766030003','WHATSAPP','PACKED'),
     (1035,'919527088008','SALESPERSON','CONFIRMED'),
@@ -116,9 +137,23 @@ FROM (SELECT order_id, sum(amount) sub, round(sum(amount * gst_rate / 100), 2) t
 WHERE t.order_id = so.id;
 
 UPDATE stock s SET reserved = r.q
-FROM (SELECT l.product_id, sum(l.qty - l.backorder_qty) q FROM order_lines l JOIN sales_orders o ON o.id = l.order_id
-      WHERE o.status IN ('CONFIRMED','PACKED') GROUP BY l.product_id) r
-WHERE r.product_id = s.product_id;
+FROM (SELECT l.product_id, o.godown_id, sum(l.qty - l.backorder_qty) q FROM order_lines l JOIN sales_orders o ON o.id = l.order_id
+      WHERE o.status IN ('CONFIRMED','PACKED') GROUP BY l.product_id, o.godown_id) r
+WHERE r.product_id = s.product_id AND r.godown_id = s.godown_id;
+
+-- a purchase order already sent to the switchgear supplier for the short RCCBs
+WITH po AS (
+  INSERT INTO purchase_orders (tenant_id, number, supplier_id, godown_id, status, expected_date, sent_at, created_by)
+  SELECT t.id, 300, s.id, g.id, 'SENT', CURRENT_DATE + 2, now() - interval '1 day', u.id
+  FROM tenants t JOIN suppliers s ON s.tenant_id = t.id AND s.name = 'Sure Switchgear Distributors'
+  JOIN godowns g ON g.tenant_id = t.id AND g.is_default JOIN users u ON u.email = 'owner@demo.in'
+  RETURNING id
+)
+INSERT INTO po_lines (po_id, product_id, qty, rate, gst_rate)
+SELECT po.id, p.id, x.qty, x.rate, 18 FROM po CROSS JOIN (VALUES ('RC40',40,2100),('FEX',30,760)) x(sku,qty,rate)
+JOIN products p ON p.sku = x.sku;
+UPDATE purchase_orders po SET subtotal = t.s, tax = round(t.s * 0.18, 2), total = t.s + round(t.s * 0.18, 2)
+FROM (SELECT po_id, sum(qty * rate) s FROM po_lines GROUP BY po_id) t WHERE t.po_id = po.id;
 
 -- Inbox: four new WhatsApp orders and one converted one
 INSERT INTO conversations (tenant_id, customer_id, phone, status, last_message_at)

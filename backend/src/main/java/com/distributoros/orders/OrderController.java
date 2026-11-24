@@ -36,7 +36,7 @@ public class OrderController {
         var stmt = db.sql("""
                 SELECT o.id, o.number, o.status, o.source, o.subtotal, o.tax, o.total, o.created_at AS "createdAt",
                        o.dispatched_at AS "dispatchedAt", o.delivered_at AS "deliveredAt", o.pod_blob AS "podPath",
-                       c.id AS "customerId", c.name AS customer, c.town,
+                       c.id AS "customerId", c.name AS customer, c.town, gd.name AS godown,
                        v.id AS "vehicleId", v.reg_no AS vehicle, v.driver_name AS driver,
                        'INV-' || i.number AS invoice,
                        (SELECT string_agg((l.qty - l.backorder_qty) || 'x ' || p.sku, ', ' ORDER BY l.id)
@@ -46,6 +46,7 @@ public class OrderController {
                 JOIN customers c ON c.id = o.customer_id
                 LEFT JOIN vehicles v ON v.id = o.vehicle_id
                 LEFT JOIN invoices i ON i.order_id = o.id
+                LEFT JOIN godowns gd ON gd.id = o.godown_id
                 WHERE o.tenant_id = :t""" + filter + " ORDER BY o.number DESC LIMIT :lim")
                 .param("t", u.tenantId()).param("lim", Math.max(1, Math.min(limit, 500)));
         if (filter.contains(":st")) stmt = stmt.param("st", st);
@@ -73,7 +74,9 @@ public class OrderController {
         if (rows.isEmpty()) throw ApiException.notFound("Order");
         Map<String, Object> o = new LinkedHashMap<>(rows.get(0));
         o.put("lines", db.sql("""
-                SELECT l.product_id AS "productId", p.sku, p.name, l.qty, l.backorder_qty AS backorder, l.rate, l.amount
+                SELECT l.product_id AS "productId", p.sku, p.name, l.qty, l.backorder_qty AS backorder, l.rate, l.amount,
+                  (SELECT string_agg(b.batch_no || ' exp ' || to_char(b.expiry_date, 'Mon YYYY') || ' x' || ob.qty, ', ')
+                     FROM order_line_batches ob JOIN stock_batches b ON b.id = ob.batch_id WHERE ob.order_line_id = l.id) AS batches
                 FROM order_lines l JOIN products p ON p.id = l.product_id WHERE l.order_id = :o ORDER BY l.id
                 """).param("o", id).query().listOfRows());
         return o;
@@ -84,14 +87,14 @@ public class OrderController {
     public record NewOrder(@NotNull Long customerId,
                            @NotBlank @Pattern(regexp = "SALESPERSON|PHONE") String source,
                            @NotEmpty @Size(max = 100) List<@Valid Line> lines,
-                           boolean overrideCredit) {}
+                           boolean overrideCredit, Long godownId) {}
 
     @PostMapping
     @PreAuthorize("hasAnyRole('OWNER','ACCOUNTANT','SALES')")
     public OrderService.CreatedOrder create(@AuthenticationPrincipal AuthUser u, @Valid @RequestBody NewOrder in) {
         return orders.create(u, in.customerId(), in.source(), null,
                 in.lines().stream().map(l -> new OrderService.LineRequest(l.productId(), l.qty())).toList(),
-                in.overrideCredit());
+                in.overrideCredit(), in.godownId());
     }
 
     @PostMapping("/{id}/pack")
