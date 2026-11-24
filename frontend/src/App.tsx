@@ -10,6 +10,7 @@ import Customers from "./pages/Customers";
 import Collections from "./pages/Collections";
 import Field from "./pages/Field";
 import Tally from "./pages/Tally";
+import Team from "./pages/Team";
 
 const UserCtx = createContext<User | null>(null);
 export const useUser = () => useContext(UserCtx)!;
@@ -26,6 +27,7 @@ const NAV: NavItem[] = [
   { path: "/collections", label: "Collections", roles: ["OWNER", "ACCOUNTANT", "SALES"], el: <Collections /> },
   { path: "/field", label: "Field & delivery", roles: ALL, el: <Field /> },
   { path: "/tally", label: "Tally sync", roles: ["OWNER", "ACCOUNTANT"], el: <Tally /> },
+  { path: "/team", label: "Team", roles: ["OWNER"], el: <Team /> },
 ];
 
 export default function App() {

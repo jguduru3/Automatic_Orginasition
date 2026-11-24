@@ -14,8 +14,13 @@ public class OutboundMessageSender {
     private static final Logger log = LoggerFactory.getLogger(OutboundMessageSender.class);
     private final WhatsAppClient client;
     private final JdbcClient db;
+    private final String lang;
 
-    public OutboundMessageSender(WhatsAppClient client, JdbcClient db) { this.client = client; this.db = db; }
+    public OutboundMessageSender(WhatsAppClient client, JdbcClient db, com.distributoros.config.AppProperties props) {
+        this.client = client; this.db = db;
+        String l = props.whatsapp().templateLanguage();
+        this.lang = l == null || l.isBlank() ? "en" : l;
+    }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -27,7 +32,9 @@ public class OutboundMessageSender {
                 log.warn("Tenant {} has no WhatsApp number configured; message {} not sent", m.tenantId(), m.messageId());
                 return;
             }
-            String waId = client.sendText(phoneId, m.toPhone(), m.body());
+            String waId = m.template() != null
+                    ? client.sendTemplate(phoneId, m.toPhone(), m.template(), lang, m.templateParams())
+                    : client.sendText(phoneId, m.toPhone(), m.body());
             if (waId != null) {
                 db.sql("UPDATE messages SET wa_message_id = :w WHERE id = :id")
                         .param("w", waId).param("id", m.messageId()).update();

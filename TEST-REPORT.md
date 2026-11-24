@@ -9,7 +9,7 @@ run. Everything else is written and wired into CI (`.github/workflows/ci.yml`) t
 | Area | What ran | Result |
 | --- | --- | --- |
 | Database schema + demo seed | Flyway SQL applied to Postgres 16 (schema, tenant, 200 historic orders) | Pass |
-| Every SQL statement in the backend | `tools/check_sql.py`: 97 statements PREPAREd against the live schema (syntax, columns, types) | 97/97 pass |
+| Every SQL statement in the backend | `tools/check_sql.py`: 104 statements PREPAREd against the live schema (syntax, columns, types) | 104/104 pass |
 | WhatsApp order parser | Compiled with `javac`, 10 real retailer messages incl. Hindi and voice-note text, 5,000 fuzz inputs | Pass, after fixing a bug (below) |
 | Tally XML | Compiled, parsed as XML, debit/credit totals balance, escaping of `& < > ' "` and control chars | Pass |
 | Stock reservation race | pgbench, 50 clients × 200 orders on the same scarce SKU | No oversell; reserved = sum of takes |
@@ -18,8 +18,8 @@ run. Everything else is written and wired into CI (`.github/workflows/ci.yml`) t
 | Idempotent receipts | pgbench, 10,000 submits over 20 keys | Exactly one payment per key |
 | Reserve → dispatch/cancel | pgbench, 10,000 mixed transactions over all SKUs | Stock never negative, reserved ≤ on hand |
 | Negative control | Same race with the row lock removed | Test catches it: 111 reserved against 22 on hand |
-| Frontend logic + every page | Vitest: 25 tests (API errors, 401 logout, network failure, draft maths, each module's key action, roles, double-tap payment) | 25/25 pass |
-| Real browser render | Chromium, desktop 1400 px and Pixel 7, all 8 modules | No JS errors, no sideways overflow |
+| Frontend logic + every page | Vitest: 31 tests (API errors, 401 logout, network failure, draft maths, each module's key action, roles, double-tap payment) | 31/31 pass |
+| Real browser render | Chromium, desktop 1400 px and Pixel 7, all 9 modules | No JS errors, no sideways overflow |
 | Infra | `bicep build` + `bicep lint` | Clean |
 | Load scripts | `k6 inspect` on all 7 scripts | Valid |
 | E2E suite | Playwright `tsc` + `--list` (15 tests) | Compiles |
@@ -44,10 +44,12 @@ run. Everything else is written and wired into CI (`.github/workflows/ci.yml`) t
 
 | Suite | Covers |
 | --- | --- |
-| `mvn verify`: 19 JUnit tests | Parser, Tally XML, webhook HMAC; full flow WhatsApp → order → pack → dispatch → photo POD → payment → Tally; credit hold and owner-only override; back-order and cancel; validation, auth and role checks; 40-thread oversell test; 20-thread duplicate payment; 10-thread double confirm; signed webhook with retries |
+| `mvn verify`: 20 JUnit tests | Parser, Tally XML, webhook HMAC; full flow WhatsApp → order → pack → dispatch → photo POD → payment → Tally; credit hold and owner-only override; back-order and cancel; validation, auth and role checks; 40-thread oversell test; 20-thread duplicate payment; 10-thread double confirm; signed webhook with retries |
 | Playwright (15 tests) | The whole demo story in a browser against the real stack, plus every module on desktop and phone |
 | k6 (7 scripts) | Read endpoints at 60 users (p95 < 800 ms); order storm at 40 users on scarce SKUs; racing pack/dispatch/deliver; payment double submits; auth abuse and malformed input (no 5xx allowed); webhook flood at 80/s with retries and bad signatures; concurrent Tally syncs (each voucher once) |
 | pgbench + SQL check | Repeated on a clean Postgres service in CI |
 
 **Before going live:** the first CI run is the first time the Java code compiles. Expect to fix small compile or
 wiring issues there. Treat a green CI run as the gate before the deploy workflow runs.
+
+See `VERIFICATION.md` for the feature-by-feature check.

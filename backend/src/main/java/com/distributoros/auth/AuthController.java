@@ -1,6 +1,7 @@
 package com.distributoros.auth;
 
 import com.distributoros.common.ApiException;
+import com.distributoros.config.AppProperties;
 import com.distributoros.security.AuthUser;
 import com.distributoros.security.JwtService;
 import com.distributoros.security.LoginRateLimiter;
@@ -27,9 +28,10 @@ public class AuthController {
     private final PasswordEncoder encoder;
     private final JwtService jwt;
     private final LoginRateLimiter limiter;
+    private final AppProperties props;
 
-    public AuthController(JdbcClient db, PasswordEncoder encoder, JwtService jwt, LoginRateLimiter limiter) {
-        this.db = db; this.encoder = encoder; this.jwt = jwt; this.limiter = limiter;
+    public AuthController(JdbcClient db, PasswordEncoder encoder, JwtService jwt, LoginRateLimiter limiter, AppProperties props) {
+        this.db = db; this.encoder = encoder; this.jwt = jwt; this.limiter = limiter; this.props = props;
     }
 
     public record LoginRequest(@NotBlank @Email @Size(max = 200) String email,
@@ -58,12 +60,13 @@ public class AuthController {
                 (String) r.get("role"), (String) r.get("name"));
         return Map.of("token", jwt.issue(u),
                 "user", Map.of("id", u.userId(), "name", u.name(), "role", u.role(),
-                        "tenantName", r.get("tenant_name")));
+                        "tenantName", r.get("tenant_name"), "simulateEnabled", props.simulateEnabled()));
     }
 
     @GetMapping("/me")
     public Map<String, Object> me(@AuthenticationPrincipal AuthUser u) {
         String tenant = db.sql("SELECT name FROM tenants WHERE id = :t").param("t", u.tenantId()).query(String.class).single();
-        return Map.of("id", u.userId(), "name", u.name(), "role", u.role(), "tenantName", tenant);
+        return Map.of("id", u.userId(), "name", u.name(), "role", u.role(), "tenantName", tenant,
+                "simulateEnabled", props.simulateEnabled());
     }
 }

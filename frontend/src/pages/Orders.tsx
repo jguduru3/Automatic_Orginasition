@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { api, post } from "../api";
-import { Loading, PageTop, StatusPill, useAction, useApi, useToast } from "../components/ui";
+import { FileButton, Loading, PageTop, StatusPill, useAction, useApi, useToast } from "../components/ui";
+import NewOrder from "./NewOrder";
 import { dayLabel, inr, lakh, n } from "../format";
 import { can, useUser } from "../App";
 
 export interface Order { id: number; number: number; status: string; source: string; total: number; createdAt: string;
-  customer: string; town?: string; vehicle?: string; driver?: string; invoice?: string; summary?: string; backorder: number }
+  customer: string; town?: string; vehicle?: string; driver?: string; invoice?: string; summary?: string; backorder: number; podPath?: string }
 export interface Vehicle { id: number; regNo: string; type: string; driver: string }
 
 const FILTERS = ["OPEN", "ALL", "CONFIRMED", "PACKED", "DISPATCHED", "DELIVERED", "CANCELLED"];
@@ -20,10 +21,14 @@ export default function Orders() {
   const vehicles = useApi(s => api<Vehicle[]>("/api/orders/vehicles", { signal: s }));
   const reload = () => { orders.reload(); summary.reload(); };
   const maxC = Math.max(1, ...(summary.data ?? []).map(s => n(s.count)));
+  const [creating, setCreating] = useState(false);
 
   return (
     <>
-      <PageTop title="Sales orders" sub="Confirmed orders hold stock. Dispatch raises the invoice and queues it for Tally." />
+      <PageTop title="Sales orders" sub="Confirmed orders hold stock. Dispatch raises the invoice and queues it for Tally.">
+        {can(user, "OWNER", "ACCOUNTANT", "SALES") && <button className="btn pri sm" onClick={() => setCreating(true)}>New order</button>}
+      </PageTop>
+      {creating && <NewOrder onClose={() => setCreating(false)} onDone={() => { setCreating(false); reload(); }} />}
       {summary.data && <div className="pipe">{summary.data.map(s => (
         <div className="stage" key={s.status}><small>{LABEL[s.status]}{s.status === "DELIVERED" ? " today" : ""}</small>
           <b>{n(s.count)}</b> <span className="num" style={{ color: "var(--muted)", fontSize: 12 }}>{lakh(s.value)}</span>
@@ -67,11 +72,12 @@ function OrderRow({ o, vehicles, onChanged, canCancel, canMove }: { o: Order; ve
           <select id={`veh-${o.id}`} value={veh} onChange={e => setVeh(Number(e.target.value))} style={{ padding: 4, border: "1px solid var(--line)", borderRadius: 6, background: "var(--surface-2)", fontSize: 12 }}>
             {vehicles.map(v => <option key={v.id} value={v.id}>{v.regNo} · {v.driver.split(" ")[0]}</option>)}
           </select>
-          <button className="btn pri sm" disabled={busy || veh === ""} onClick={() => act("dispatch", { vehicleId: veh }, r => `${r.invoice} raised and queued for Tally. ${r.driver} notified.`)}>Dispatch & invoice</button>
+          <button className="btn pri sm" disabled={busy || veh === ""} onClick={() => act("dispatch", { vehicleId: veh }, r => `${r.invoice} raised and queued for Tally. Loaded on ${r.vehicle} (${r.driver}).`)}>Dispatch & invoice</button>
         </>}
         {canMove && o.status === "DISPATCHED" && <DeliverButton id={o.id} number={o.number} onDone={onChanged} />}
         {o.status === "DISPATCHED" && <span className="sub">{o.vehicle}</span>}
         {o.status === "DELIVERED" && <span className="sub">{o.invoice} · delivered</span>}
+        {o.podPath && <FileButton path={o.podPath} label="Proof photo" />}
         {canCancel && (o.status === "CONFIRMED" || o.status === "PACKED") && <button className="btn ghost sm" disabled={busy} onClick={() => act("cancel", {}, `SO-${o.number} cancelled, stock released`)}>Cancel</button>}
       </div></td>
     </tr>

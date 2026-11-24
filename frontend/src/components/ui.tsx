@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { ApiError } from "../api";
+import { ApiError, fileUrl } from "../api";
 
 /* ---------- toast ---------- */
 const ToastCtx = createContext<(msg: string) => void>(() => {});
@@ -104,3 +104,25 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 export const PageTop = ({ title, sub, children }: { title: string; sub?: string; children?: ReactNode }) => (
   <div className="top"><div><h1>{title}</h1>{sub && <div className="sub">{sub}</div>}</div>{children}</div>
 );
+
+/** Opens a stored photo or voice note in a modal (fetched with the user's token). */
+export function FileButton({ path, label, kind = "image" }: { path: string; label: string; kind?: "image" | "audio" }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  const open = async () => {
+    setErr("");
+    try { setUrl(await fileUrl(path)); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  return (
+    <>
+      <button type="button" className="btn ghost sm" onClick={open}>{label}</button>
+      {err && <span className="err">{err}</span>}
+      {url && <Modal title={label} onClose={() => setUrl(null)}>
+        {kind === "audio" ? <audio controls src={url} style={{ width: "100%" }} /> : <img src={url} alt={label} style={{ maxWidth: "100%", borderRadius: 8 }} />}
+        <button className="btn" onClick={() => setUrl(null)}>Close</button>
+      </Modal>}
+    </>
+  );
+}

@@ -77,7 +77,7 @@ reached through the app's managed identity.
 
 ```bash
 cd backend && mvn verify            # unit + Testcontainers integration + concurrency tests (needs Docker)
-cd frontend && npm test             # 25 component and logic tests
+cd frontend && npm test             # 31 component and logic tests
 bash load-tests/pgbench/run.sh      # DB concurrency invariants (needs a migrated + seeded "dos" database)
 python3 tools/check_sql.py backend/src/main/java postgresql://...   # PREPAREs every SQL statement
 docker compose up -d --wait && (cd e2e && npm ci && npx playwright test) && for s in load-tests/k6/*.js; do k6 run $s; done

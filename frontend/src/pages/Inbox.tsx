@@ -2,13 +2,13 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, post } from "../api";
 import { computeDraft, DraftCredit, DraftLine } from "../draft";
-import { Loading, PageTop, Pill, StatusPill, useAction, useApi, useToast } from "../components/ui";
+import { FileButton, Loading, PageTop, Pill, StatusPill, useAction, useApi, useToast } from "../components/ui";
 import { inr, n, time } from "../format";
 import { can, useUser } from "../App";
 
 interface Conv { id: number; phone: string; status: string; customer?: string; town?: string; preview?: string; kind?: string;
   lastMessageAt: string; orderNumber?: number }
-interface Msg { id: number; direction: "IN" | "OUT"; body: string; kind: string; createdAt: string }
+interface Msg { id: number; direction: "IN" | "OUT"; body: string; kind: string; createdAt: string; mediaPath?: string }
 interface Thread extends Conv { customerId?: number; tier?: string; orderId?: number; orderStatus?: string; orderTotal?: number; messages: Msg[] }
 interface Draft { lines: DraftLine[]; credit?: DraftCredit; unknownCustomer?: boolean }
 interface Product { id: number; sku: string; name: string }
@@ -50,6 +50,7 @@ export default function Inbox() {
 function Conversation({ id, onChanged }: { id: number; onChanged: () => void }) {
   const t = useApi(s => api<Thread>(`/api/inbox/${id}`, { signal: s }), [id]);
   const [text, setText] = useState("");
+  const user = useUser();
   const { busy, run } = useAction();
   const msgsRef = useRef<HTMLDivElement>(null);
   useEffect(() => { const el = msgsRef.current; if (el) el.scrollTop = el.scrollHeight; }, [t.data]);
@@ -58,11 +59,12 @@ function Conversation({ id, onChanged }: { id: number; onChanged: () => void }) 
   const th = t.data;
   const refresh = () => { t.reload(); onChanged(); };
 
-  async function simulate(e: FormEvent) {
+  async function send(e: FormEvent, asCustomer: boolean) {
     e.preventDefault();
     if (!text.trim()) return;
-    await run(() => post("/api/inbox/simulate", { phone: th.phone, text: text.trim() })).catch(() => {});
-    setText("");
+    const ok = await run(() => asCustomer ? post("/api/inbox/simulate", { phone: th.phone, text: text.trim() })
+      : post(`/api/inbox/${th.id}/reply`, { body: text.trim() }), asCustomer ? undefined : "Reply sent on WhatsApp").then(() => true).catch(() => false);
+    if (ok) setText("");
     refresh();
   }
 
@@ -74,15 +76,20 @@ function Conversation({ id, onChanged }: { id: number; onChanged: () => void }) 
         <div className="msgs" ref={msgsRef}>
           {th.messages.map(m => (
             <div key={m.id} className={`msg ${m.direction === "IN" ? "in" : "out"} ${m.kind === "VOICE" ? "voice" : ""}`}>
-              {m.body}<time>{time(m.createdAt)}{m.direction === "OUT" ? " ✓✓" : ""}</time>
+              {m.body}
+              {m.mediaPath && <div><FileButton path={m.mediaPath} label={m.kind === "VOICE" ? "Play voice note" : "View photo"} kind={m.kind === "VOICE" ? "audio" : "image"} /></div>}
+              <time>{time(m.createdAt)}{m.direction === "OUT" ? " ✓✓" : ""}</time>
             </div>
           ))}
         </div>
-        <form className="composer" onSubmit={simulate}>
-          <label htmlFor="simtxt" className="sr">Simulate a customer message</label>
+        <form className="composer" onSubmit={e => send(e, false)}>
+          <label htmlFor="simtxt" className="sr">Message</label>
           <textarea id="simtxt" value={text} maxLength={4000} onChange={e => setText(e.target.value)}
-            placeholder="Test: type as the customer, e.g. 16A MCB 50 pcs" />
-          <button className="btn sm" type="submit" disabled={busy || !text.trim()}>Send as customer</button>
+            placeholder="Reply to the customer, or test: send as customer, e.g. 16A MCB 50 pcs" />
+          <div style={{ display: "grid", gap: 6 }}>
+            <button className="btn pri sm" type="submit" disabled={busy || !text.trim()}>Send reply</button>
+            {user.simulateEnabled && <button className="btn sm" type="button" disabled={busy || !text.trim()} onClick={e => send(e, true)}>Send as customer</button>}
+          </div>
         </form>
       </div>
       <div className="conv">

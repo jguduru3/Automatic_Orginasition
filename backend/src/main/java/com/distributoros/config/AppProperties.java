@@ -13,7 +13,8 @@ public record AppProperties(
 
     public record Jwt(String secret, int ttlHours) {}
 
-    public record WhatsApp(String mode, String apiBase, String accessToken, String appSecret, String verifyToken) {
+    public record WhatsApp(String mode, String apiBase, String accessToken, String appSecret, String verifyToken,
+                           String reminderTemplate, String templateLanguage) {
         public boolean isCloud() { return "cloud".equalsIgnoreCase(mode); }
     }
 

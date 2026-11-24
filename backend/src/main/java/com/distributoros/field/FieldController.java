@@ -46,6 +46,24 @@ public class FieldController {
         return m;
     }
 
+    @GetMapping("/salespeople")
+    public List<Map<String, Object>> salespeople(@AuthenticationPrincipal AuthUser u) {
+        return db.sql("SELECT id, name FROM users WHERE tenant_id = :t AND role = 'SALES' AND active ORDER BY name")
+                .param("t", u.tenantId()).query().listOfRows();
+    }
+
+    @GetMapping("/visits/today")
+    public List<Map<String, Object>> visitsToday(@AuthenticationPrincipal AuthUser u) {
+        String mine = "SALES".equals(u.role()) ? " AND v.user_id = :u" : "";
+        var st = db.sql("""
+                SELECT v.id, u.name AS salesperson, c.name AS customer, v.note, v.lat, v.lng, v.checked_in_at AS "checkedInAt"
+                FROM visits v JOIN users u ON u.id = v.user_id LEFT JOIN customers c ON c.id = v.customer_id
+                WHERE v.tenant_id = :t AND v.checked_in_at >= date_trunc('day', now())""" + mine + " ORDER BY v.checked_in_at DESC LIMIT 200")
+                .param("t", u.tenantId());
+        if (!mine.isEmpty()) st = st.param("u", u.userId());
+        return st.query().listOfRows();
+    }
+
     public record CheckIn(Long customerId, @DecimalMin("-90") @DecimalMax("90") Double lat,
                           @DecimalMin("-180") @DecimalMax("180") Double lng, @Size(max = 500) String note) {}
 

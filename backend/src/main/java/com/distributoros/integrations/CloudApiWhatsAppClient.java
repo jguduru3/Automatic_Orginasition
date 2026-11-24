@@ -46,6 +46,27 @@ public class CloudApiWhatsAppClient implements WhatsAppClient {
     }
 
     @Override
+    public String sendTemplate(String phoneNumberId, String toPhone, String template, String language, java.util.List<String> params) {
+        var parameters = params.stream().map(p -> Map.of("type", "text", "text", p)).toList();
+        Map<String, Object> payload = Map.of(
+                "messaging_product", "whatsapp",
+                "to", toPhone,
+                "type", "template",
+                "template", Map.of("name", template, "language", Map.of("code", language),
+                        "components", java.util.List.of(Map.of("type", "body", "parameters", parameters))));
+        String resp = http.post().uri("/{id}/messages", phoneNumberId)
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(payload)
+                .retrieve().body(String.class);
+        try {
+            return json.readTree(resp).path("messages").path(0).path("id").asText(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @Override
     public byte[] downloadMedia(String mediaId) {
         String meta = http.get().uri("/{id}", mediaId).header("Authorization", "Bearer " + token)
                 .retrieve().body(String.class);

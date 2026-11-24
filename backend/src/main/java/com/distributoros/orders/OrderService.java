@@ -168,11 +168,15 @@ public class OrderService {
 
     /** Stores an outgoing message in the thread and queues the WhatsApp send for after commit. */
     public void sendMessage(long tenantId, long conversationId, String phone, String body) {
+        sendMessage(tenantId, conversationId, phone, body, null, null);
+    }
+
+    public void sendMessage(long tenantId, long conversationId, String phone, String body, String template, List<String> params) {
         long msgId = db.sql("""
                 INSERT INTO messages (tenant_id, conversation_id, direction, body) VALUES (:t, :c, 'OUT', :b) RETURNING id
                 """).param("t", tenantId).param("c", conversationId).param("b", body).query(Long.class).single();
         db.sql("UPDATE conversations SET last_message_at = now() WHERE id = :c").param("c", conversationId).update();
-        events.publishEvent(new OutboundMessage(tenantId, msgId, phone, body));
+        events.publishEvent(new OutboundMessage(tenantId, msgId, phone, body, template, params));
     }
 
     private Map<String, Object> lockOrder(AuthUser u, long id) {

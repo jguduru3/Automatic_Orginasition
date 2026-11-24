@@ -138,13 +138,52 @@ class OrderFlowIT extends IntegrationTestBase {
     }
 
     @Test
+    void specialRatesDetailsVisitsReplyAndTeam() {
+        var c = newCustomer("C", 10_000_000);
+        long cid = id(c.get("customerId"));
+        long w15 = productId("W15");
+        // special rate overrides tier pricing in the WhatsApp draft
+        assertThat(rest.exchange("/api/customers/" + cid + "/prices", HttpMethod.PUT,
+                new HttpEntity<>(List.of(Map.of("productId", w15, "rate", 1200)), auth(owner)), MAP).getStatusCode()).isEqualTo(HttpStatus.OK);
+        post(owner, "/api/inbox/simulate", Map.of("phone", c.get("phone"), "text", "1.5 wire 2 coil"));
+        long conv = conversationFor((String) c.get("phone"));
+        @SuppressWarnings("unchecked") var lines = (List<Map<String, Object>>) getMap(owner, "/api/inbox/" + conv + "/draft").getBody().get("lines");
+        assertThat(new BigDecimal(lines.get(0).get("rate").toString())).isEqualByComparingTo("1200");
+        assertThat(lines.get(0).get("priceSource")).isEqualTo("Project price");
+
+        // staff reply lands in the thread
+        assertThat(post(owner, "/api/inbox/" + conv + "/reply", Map.of("body", "Sending by 5 pm")).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // edit details and assign salesperson
+        long amit = id(getList(owner, "/api/field/salespeople").getBody().get(0).get("id"));
+        assertThat(rest.exchange("/api/customers/" + cid, HttpMethod.PUT,
+                new HttpEntity<>(Map.of("name", "Renamed Retailer", "town", "Kothrud", "salespersonId", amit), auth(owner)), MAP)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // salesperson check-in, owner sees it
+        String sales = login("amit@demo.in");
+        assertThat(post(sales, "/api/field/visits", Map.of("customerId", cid, "lat", 18.5, "lng", 73.8)).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(getList(owner, "/api/field/visits/today").getBody()).anyMatch(v -> "Renamed Retailer".equals(v.get("customer")));
+        assertThat(post(owner, "/api/field/visits", Map.of("customerId", cid)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+
+        // team: owner adds a person who can then sign in; duplicate email refused
+        String email = "new" + c.get("phone") + "@demo.in";
+        var add = Map.of("email", email, "password", "Start@2026", "name", "New Person", "role", "DELIVERY");
+        assertThat(post(owner, "/api/users", add).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(post(owner, "/api/users", add).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(post(sales, "/api/users", add).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        var res = rest.postForEntity("/api/auth/login", Map.of("email", email, "password", "Start@2026"), Map.class);
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
     void dashboardAndListsRespond() {
         for (String url : List.of("/api/dashboard", "/api/field", "/api/tally", "/api/me")) {
             assertThat(getMap(owner, url).getStatusCode()).as(url).isEqualTo(HttpStatus.OK);
         }
         for (String url : List.of("/api/inbox", "/api/orders?status=ALL", "/api/orders/summary", "/api/inventory",
                 "/api/customers", "/api/customers?q=patil", "/api/collections", "/api/payments/today", "/api/users",
-                "/api/customers/tiers", "/api/orders/vehicles")) {
+                "/api/customers/tiers", "/api/orders/vehicles", "/api/field/salespeople", "/api/field/visits/today")) {
             assertThat(getList(owner, url).getStatusCode()).as(url).isEqualTo(HttpStatus.OK);
         }
     }

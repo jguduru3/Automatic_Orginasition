@@ -171,3 +171,79 @@ describe("inventory, customers, collections, field, tally", () => {
     expect(calls.filter(c => c.url === "/api/tally/sync")).toHaveLength(1);
   });
 });
+
+describe("features added in re-verification", () => {
+  it("books a phone order from the Orders page", async () => {
+    let body: unknown;
+    renderAt("/orders", {
+      "GET /api/orders": F.orders, "GET /api/orders/summary": F.summary, "GET /api/orders/vehicles": F.vehicles,
+      "GET /api/customers": F.customers, "GET /api/inventory": F.inventory,
+      "POST /api/orders": (b: unknown) => { body = b; return { json: { id: 50, number: 1040, total: 5000, backorders: [] } }; },
+    });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "New order" }));
+    await u.selectOptions(await screen.findByLabelText("Customer"), "5");
+    await u.selectOptions(screen.getByLabelText("Item 1"), "1");
+    const q = screen.getByLabelText("Quantity 1");
+    await u.clear(q); await u.type(q, "4");
+    await u.click(screen.getByRole("button", { name: "Confirm order" }));
+    await waitFor(() => expect(body).toEqual({ customerId: 5, source: "PHONE", overrideCredit: false, lines: [{ productId: 1, qty: 4 }] }));
+  });
+
+  it("shows the server's credit-hold reason in the order form", async () => {
+    renderAt("/orders", {
+      "GET /api/orders": F.orders, "GET /api/orders/summary": F.summary, "GET /api/orders/vehicles": F.vehicles,
+      "GET /api/customers": F.customers, "GET /api/inventory": F.inventory,
+      "POST /api/orders": () => ({ status: 422, json: { code: "CREDIT_HOLD", message: "Order takes the customer over the limit" } }),
+    });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "New order" }));
+    await u.selectOptions(await screen.findByLabelText("Customer"), "5");
+    await u.selectOptions(screen.getByLabelText("Item 1"), "1");
+    await u.click(screen.getByRole("button", { name: "Confirm order" }));
+    expect(await screen.findByText("Order takes the customer over the limit")).toBeInTheDocument();
+  });
+
+  it("staff reply goes to the reply endpoint, not the simulator", async () => {
+    const calls = renderAt("/inbox", { "GET /api/inbox": F.inbox, "GET /api/inbox/1": F.thread1, "GET /api/inbox/1/draft": F.draft1,
+      "GET /api/inventory": F.inventory, "POST /api/inbox/1/reply": { ok: true } });
+    const u = userEvent.setup();
+    await u.type(await screen.findByLabelText("Message"), "Sending by 5 pm");
+    await u.click(screen.getByRole("button", { name: "Send reply" }));
+    await waitFor(() => expect(calls.find(c => c.url === "/api/inbox/1/reply")?.body).toEqual({ body: "Sending by 5 pm" }));
+    expect(calls.some(c => c.url === "/api/inbox/simulate")).toBe(false);
+  });
+
+  it("rejects an invalid match pattern before saving an item", async () => {
+    renderAt("/inventory", { "GET /api/inventory": F.inventory });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Add item" }));
+    await u.type(screen.getByLabelText(/match patterns/), "([[bad");
+    expect(screen.getByText(/Invalid pattern/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("salesperson checks in at a shop", async () => {
+    let body: unknown;
+    renderAt("/field", { "GET /api/field": F.field, "GET /api/field/visits/today": [], "GET /api/customers": F.customers,
+      "POST /api/field/visits": (b: unknown) => { body = b; return { json: { id: 1 } }; } }, "SALES");
+    const u = userEvent.setup();
+    await u.selectOptions(await screen.findByLabelText("Customer"), "5");
+    await u.type(screen.getByLabelText("Note"), "Wants new price list");
+    await u.click(screen.getByRole("button", { name: "Check in" }));
+    await waitFor(() => expect(body).toEqual({ customerId: 5, note: "Wants new price list" }));
+  });
+
+  it("owner adds a team member; others don't see Team", async () => {
+    let body: unknown;
+    renderAt("/team", { "GET /api/users": [{ id: 1, email: "owner@demo.in", name: "Datta", role: "OWNER", active: true, monthlyTarget: 0 }],
+      "POST /api/users": (b: unknown) => { body = b; return { json: { id: 9 } }; } });
+    const u = userEvent.setup();
+    await u.click(await screen.findByRole("button", { name: "Add person" }));
+    await u.type(screen.getByLabelText("Name"), "Sunil");
+    await u.type(screen.getByLabelText("Email"), "sunil@demo.in");
+    await u.type(screen.getByLabelText(/Temporary password/), "Start@2026");
+    await u.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Add person" }));
+    await waitFor(() => expect(body).toMatchObject({ name: "Sunil", email: "sunil@demo.in", role: "SALES" }));
+  });
+});

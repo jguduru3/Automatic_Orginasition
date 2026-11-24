@@ -96,6 +96,54 @@ public class CustomerController {
         return Map.of("ok", true);
     }
 
+    public record CustomerDetails(@NotBlank @Size(max = 200) String name, @Size(max = 100) String town,
+                                  @Size(max = 15) String gstin, Long salespersonId) {}
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OWNER','ACCOUNTANT')")
+    @Transactional
+    public Map<String, Object> update(@AuthenticationPrincipal AuthUser u, @PathVariable long id,
+                                      @Valid @RequestBody CustomerDetails in) {
+        int n = db.sql("UPDATE customers SET name = :n, town = :town, gstin = :g, salesperson_id = :sp WHERE id = :id AND tenant_id = :t")
+                .param("n", in.name().trim()).param("town", in.town()).param("g", in.gstin())
+                .param("sp", salesperson(u.tenantId(), in.salespersonId())).param("id", id).param("t", u.tenantId()).update();
+        if (n == 0) throw ApiException.notFound("Customer");
+        return Map.of("ok", true);
+    }
+
+    @GetMapping("/{id}/prices")
+    public List<Map<String, Object>> prices(@AuthenticationPrincipal AuthUser u, @PathVariable long id) {
+        return db.sql("""
+                SELECT p.id AS "productId", p.sku, p.name, cp.rate FROM customer_prices cp
+                JOIN products p ON p.id = cp.product_id JOIN customers c ON c.id = cp.customer_id
+                WHERE cp.customer_id = :c AND c.tenant_id = :t ORDER BY p.sku
+                """).param("c", id).param("t", u.tenantId()).query().listOfRows();
+    }
+
+    public record SpecialPrice(@NotNull Long productId, @NotNull @PositiveOrZero @Digits(integer = 10, fraction = 2) BigDecimal rate) {}
+
+    /** Replaces the customer's special (project) rates. An empty list removes them all. */
+    @PutMapping("/{id}/prices")
+    @PreAuthorize("hasAnyRole('OWNER','ACCOUNTANT')")
+    @Transactional
+    public Map<String, Object> setPrices(@AuthenticationPrincipal AuthUser u, @PathVariable long id,
+                                         @Valid @RequestBody @Size(max = 500) List<@Valid SpecialPrice> in) {
+        Integer own = db.sql("SELECT count(*) FROM customers WHERE id = :c AND tenant_id = :t").param("c", id)
+                .param("t", u.tenantId()).query(Integer.class).single();
+        if (own == 0) throw ApiException.notFound("Customer");
+        db.sql("DELETE FROM customer_prices WHERE customer_id = :c").param("c", id).update();
+        for (SpecialPrice sp : in) {
+            int ok = db.sql("""
+                    INSERT INTO customer_prices (customer_id, product_id, rate)
+                    SELECT :c, p.id, :r FROM products p WHERE p.id = :p AND p.tenant_id = :t
+                    ON CONFLICT (customer_id, product_id) DO UPDATE SET rate = EXCLUDED.rate
+                    """).param("c", id).param("r", sp.rate()).param("p", sp.productId()).param("t", u.tenantId()).update();
+            if (ok == 0) throw ApiException.badRequest("BAD_PRODUCT", "Item " + sp.productId() + " not found");
+        }
+        activity.log(u.tenantId(), u.userId(), "PRICES_CHANGED", in.size() + " special rates set", "customer", id);
+        return Map.of("ok", true, "count", in.size());
+    }
+
     @GetMapping("/tiers")
     public List<Map<String, Object>> tiers(@AuthenticationPrincipal AuthUser u) {
         return db.sql("SELECT code, name, discount_pct AS discount FROM price_tiers WHERE tenant_id = :t ORDER BY code")

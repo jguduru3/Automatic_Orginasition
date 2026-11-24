@@ -15,5 +15,11 @@ public class MockWhatsAppClient implements WhatsAppClient {
     }
 
     @Override
+    public String sendTemplate(String phoneNumberId, String toPhone, String template, String language, java.util.List<String> params) {
+        log.info("[mock whatsapp] template={} to={}", template, toPhone);
+        return "mock-" + UUID.randomUUID();
+    }
+
+    @Override
     public byte[] downloadMedia(String mediaId) { return null; }
 }

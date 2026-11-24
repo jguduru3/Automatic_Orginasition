@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { login, nav } from "./helpers";
 
 // Runs on desktop and phone: every module renders without errors or horizontal overflow.
-const MODULES = ["Dashboard", "WhatsApp orders", "Sales orders", "Inventory", "Customers & credit", "Collections", "Field & delivery", "Tally sync"];
+const MODULES = ["Dashboard", "WhatsApp orders", "Sales orders", "Inventory", "Customers & credit", "Collections", "Field & delivery", "Tally sync", "Team"];
 
 test("every module renders cleanly", async ({ page }) => {
   const errors: string[] = [];

@@ -46,7 +46,7 @@ export async function api<T>(path: string, opts: Opts = {}): Promise<T> {
 }
 
 export type Role = "OWNER" | "ACCOUNTANT" | "SALES" | "DELIVERY";
-export interface User { id: number; name: string; role: Role; tenantName: string }
+export interface User { id: number; name: string; role: Role; tenantName: string; simulateEnabled?: boolean }
 
 export const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body });
 export const put = <T,>(path: string, body: unknown) => api<T>(path, { method: "PUT", body });
@@ -56,4 +56,12 @@ export function idempotencyKey(): string {
   const c = globalThis.crypto;
   if (c && "randomUUID" in c) return c.randomUUID();
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+/** Downloads a protected file (POD photo, voice note) as an object URL. Caller revokes it. */
+export async function fileUrl(path: string): Promise<string> {
+  const t = getToken();
+  const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+  if (!res.ok) throw new ApiError(res.status, "FILE", res.status === 404 ? "File not found" : "Could not open the file");
+  return URL.createObjectURL(await res.blob());
 }

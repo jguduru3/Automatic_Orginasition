@@ -113,7 +113,11 @@ public class PaymentService {
                 INSERT INTO conversations (tenant_id, customer_id, phone, status) VALUES (:t, :c, :p, 'CONVERTED')
                 ON CONFLICT (tenant_id, phone) DO UPDATE SET last_message_at = now() RETURNING id
                 """).param("t", u.tenantId()).param("c", customerId).param("p", r.get("phone")).query(Long.class).single();
-        orders.sendMessage(u.tenantId(), conv, (String) r.get("phone"), body);
+        String tpl = props.whatsapp().reminderTemplate();
+        String due = Money.of(r.get("due")).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString();
+        orders.sendMessage(u.tenantId(), conv, (String) r.get("phone"), body,
+                tpl == null || tpl.isBlank() ? null : tpl,
+                List.of(String.valueOf(r.get("name")), "Rs " + due, String.valueOf(r.get("oldest"))));
         activity.log(u.tenantId(), u.userId(), "REMINDER_SENT", "Payment reminder sent to " + r.get("name"), "customer", customerId);
         return Map.of("ok", true);
     }
